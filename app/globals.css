@@ -1,0 +1,158 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: "Aptos", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Aptos Display", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+
+* {
+  border-color: theme("colors.line");
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-white text-navy-900 antialiased;
+  font-family: var(--font-sans);
+}
+
+::selection {
+  background: #c4e2f5;
+  color: #0b1f3a;
+}
+
+@layer base {
+  h1, h2, h3, h4 {
+    @apply font-display tracking-[-0.02em];
+  }
+
+  a {
+    @apply underline-offset-4;
+  }
+
+  :focus-visible {
+    outline: 3px solid #55adde;
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .container-page {
+    @apply mx-auto w-full max-w-7xl px-5 sm:px-6 lg:px-8;
+  }
+
+  .card {
+    @apply rounded-2xl border border-line bg-white shadow-card;
+  }
+
+  .card-muted {
+    @apply rounded-2xl border border-line bg-mist;
+  }
+
+  .label {
+    @apply mb-1.5 block text-[13px] font-semibold text-navy-700;
+  }
+
+  .input {
+    @apply w-full rounded-xl border border-line bg-white px-3.5 py-2.5 text-[15px] text-navy-900 shadow-sm outline-none transition placeholder:text-navy-300 hover:border-navy-200 focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-navy-50 disabled:text-navy-400;
+  }
+
+  .textarea {
+    @apply input min-h-24 resize-y;
+  }
+
+  .select {
+    @apply input appearance-none bg-[length:18px_18px] bg-[right_12px_center] bg-no-repeat pr-10;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' fill='none' stroke='%2312315A' stroke-linecap='round' stroke-linejoin='round' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
+
+  .btn {
+    @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-55;
+  }
+
+  .btn-primary {
+    @apply btn bg-navy-900 text-white shadow-sm hover:bg-navy-800 active:bg-navy-950;
+  }
+
+  .btn-secondary {
+    @apply btn border border-line bg-white text-navy-800 hover:border-navy-200 hover:bg-navy-50;
+  }
+
+  .btn-teal {
+    @apply btn bg-teal-600 text-white hover:bg-teal-700;
+  }
+
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700;
+  }
+
+  .btn-ghost {
+    @apply btn text-navy-700 hover:bg-navy-50;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold leading-none ring-1 ring-inset;
+  }
+
+  .table-wrap {
+    @apply overflow-x-auto rounded-2xl border border-line bg-white;
+  }
+
+  .data-table {
+    @apply min-w-full divide-y divide-line text-left text-sm;
+  }
+
+  .data-table thead {
+    @apply bg-navy-50/70;
+  }
+
+  .data-table th {
+    @apply whitespace-nowrap px-4 py-3 text-[11px] font-bold uppercase tracking-[0.08em] text-navy-500;
+  }
+
+  .data-table td {
+    @apply whitespace-nowrap px-4 py-3.5 align-middle text-navy-700;
+  }
+
+  .data-table tbody {
+    @apply divide-y divide-line;
+  }
+
+  .data-table tbody tr {
+    @apply transition hover:bg-sky-50/50;
+  }
+
+  .section-kicker {
+    @apply text-xs font-bold uppercase tracking-[0.18em] text-teal-600;
+  }
+
+  .staff-page-title {
+    @apply text-2xl font-semibold text-navy-900 sm:text-3xl;
+  }
+
+  .prose-clinic p {
+    @apply leading-7 text-navy-600;
+  }
+
+  .field-error {
+    @apply mt-1.5 text-xs font-medium text-red-600;
+  }
+
+  .divider {
+    @apply border-t border-line;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white;
+  }
+}
