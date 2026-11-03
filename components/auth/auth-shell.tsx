@@ -73,7 +73,7 @@ export function AuthShell({
             {footer && <div className="mt-4 text-center text-[11px] leading-5 text-navy-400">{footer}</div>}
             <p className="mt-6 text-center text-[11px] leading-5 text-navy-400">
               Having trouble? Call the clinic administrator on{" "}
-              <a href="tel:+254712345678" className="font-semibold text-navy-600">+254 712 345 678</a>.
+              <a href="tel:+254705188578" className="font-semibold text-navy-600">+254 705 188 578</a>.
             </p>
           </div>
         </div>

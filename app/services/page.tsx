@@ -11,8 +11,8 @@ export const metadata = {
   description: "Dental and optical services at Pioneer Family Dental and Optical Clinic in Nairobi.",
 };
 
-export default function ServicesPage() {
-  const services = getServices();
+export default async function ServicesPage() {
+  const services = await getServices();
   const dental = services.filter((s) => s.department === "dental");
   const optical = services.filter((s) => s.department === "optical");
 
@@ -32,8 +32,8 @@ export default function ServicesPage() {
               <CalendarCheck className="h-4 w-4" aria-hidden />
               Book an appointment
             </Link>
-            <a href="tel:+254712345678" className="btn-secondary">
-              Call +254 712 345 678
+            <a href="tel:+254705188578" className="btn-secondary">
+              Call +254 705 188 578
             </a>
           </div>
         </div>

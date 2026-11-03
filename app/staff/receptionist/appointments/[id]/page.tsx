@@ -53,12 +53,12 @@ export default async function ReceptionAppointmentDetail({
   await requireRole("receptionist");
   const { id } = await params;
   const flash = await searchParams;
-  const appointment = getAppointment(id);
+  const appointment = await getAppointment(id);
   if (!appointment) notFound();
 
-  const patient = appointment.patient_id ? getPatient(appointment.patient_id) : undefined;
-  const notifications = getNotificationsForAppointment(appointment.id);
-  const audit = getAuditForEntity("appointment", appointment.id, 12);
+  const patient = appointment.patient_id ? await getPatient(appointment.patient_id) : undefined;
+  const notifications = await getNotificationsForAppointment(appointment.id);
+  const audit = await getAuditForEntity("appointment", appointment.id, 12);
   const returnTo = `/staff/receptionist/appointments/${appointment.id}`;
   const active = !["Completed", "Cancelled", "No Show", "In Consultation"].includes(appointment.status);
   const registerHref = `/staff/receptionist/patients/new?appointmentId=${encodeURIComponent(appointment.id)}&fullName=${encodeURIComponent(appointment.full_name)}&phone=${encodeURIComponent(appointment.phone)}${appointment.email ? `&email=${encodeURIComponent(appointment.email)}` : ""}${appointment.date_of_birth ? `&dateOfBirth=${encodeURIComponent(appointment.date_of_birth)}` : ""}${appointment.gender ? `&gender=${encodeURIComponent(appointment.gender)}` : ""}`;

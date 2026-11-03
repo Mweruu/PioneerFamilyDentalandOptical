@@ -19,7 +19,7 @@ export default async function OptometristPatientsPage({
   await requireRole("eye_doctor");
   const params = await searchParams;
   const query = params.q?.trim() ?? "";
-  const patients = listPatientsForDepartment("optical", query, 100);
+  const patients = await listPatientsForDepartment("optical", query, 100);
 
   return (
     <div>

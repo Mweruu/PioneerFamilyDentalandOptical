@@ -34,7 +34,7 @@ const opticalHighlights = [
 ];
 
 export default async function HomePage() {
-  const services = getServices();
+  const services = await getServices();
   const dental = services.filter((s) => s.department === "dental").slice(0, 4);
   const optical = services.filter((s) => s.department === "optical").slice(0, 4);
 
@@ -133,7 +133,7 @@ export default async function HomePage() {
             { icon: ShieldCheck, title: "Privacy-first records", text: "Secure, role-based access" },
             { icon: Clock, title: "Easy scheduling", text: "Online booking & reminders" },
             { icon: Users, title: "Whole-family care", text: "Dental and optical together" },
-            { icon: MapPin, title: "Convenient location", text: "Ngong Road, Nairobi" },
+            { icon: MapPin, title: "Convenient location", text: "Buruburu, Nairobi" },
           ].map((item) => (
             <div key={item.title} className="flex items-start gap-3 rounded-xl px-2 py-2">
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-teal-50 text-teal-700">
@@ -263,18 +263,18 @@ export default async function HomePage() {
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <div className="rounded-2xl border border-line bg-white p-4">
                 <MapPin className="h-5 w-5 text-teal-600" aria-hidden />
-                <p className="mt-3 text-sm font-semibold text-navy-900">Pioneer Plaza, 2nd Floor</p>
-                <p className="mt-1 text-xs leading-5 text-navy-500">Ngong Road, Nairobi, Kenya</p>
+                <p className="mt-3 text-sm font-semibold text-navy-900">Buruburu Phase 1 along Outering Road Junction (opposite the bus terminus)</p>
+                <p className="mt-1 text-xs leading-5 text-navy-500"> Nairobi, Kenya</p>
               </div>
               <div className="rounded-2xl border border-line bg-white p-4">
                 <Phone className="h-5 w-5 text-teal-600" aria-hidden />
-                <p className="mt-3 text-sm font-semibold text-navy-900">+254 712 345 678</p>
+                <p className="mt-3 text-sm font-semibold text-navy-900">+254 705 188 578</p>
                 <p className="mt-1 text-xs leading-5 text-navy-500">Call or WhatsApp during clinic hours</p>
               </div>
               <div className="rounded-2xl border border-line bg-white p-4">
                 <Clock className="h-5 w-5 text-teal-600" aria-hidden />
-                <p className="mt-3 text-sm font-semibold text-navy-900">Mon–Fri, 8am–5pm</p>
-                <p className="mt-1 text-xs leading-5 text-navy-500">Saturday 8am–2pm · Sunday closed</p>
+                <p className="mt-3 text-sm font-semibold text-navy-900">Mon–Fri, 8am–8pm</p>
+                <p className="mt-1 text-xs leading-5 text-navy-500">Saturday 8am–6pm · Sunday closed</p>
               </div>
               <div className="rounded-2xl border border-line bg-white p-4">
                 <CalendarCheck className="h-5 w-5 text-teal-600" aria-hidden />

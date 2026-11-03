@@ -1,65 +1,62 @@
 import "server-only";
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
-import { SignJWT, jwtVerify } from "jose";
-import bcrypt from "bcryptjs";
-import { db } from "./db";
+import { createClient } from "./supabase/server";
 import type { Role, StaffUser } from "./types";
 import { ROLE_HOME } from "./types";
 import { nowIso } from "./utils";
 
-const COOKIE_NAME = "pioneer_session";
-const SESSION_HOURS = 8;
+type StaffRow = {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  title: string | null;
+  active: boolean;
+  created_at: string;
+};
 
-function secret() {
-  const configured = process.env.SESSION_SECRET;
-  if (!configured && process.env.NODE_ENV === "production") {
-    throw new Error("SESSION_SECRET must be set before running the clinic in production.");
-  }
-  const value = configured || "pioneer-clinic-development-secret-change-before-production";
-  return new TextEncoder().encode(value);
+function mapStaff(row: StaffRow): StaffUser {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: row.role,
+    title: row.title,
+    active: row.active ? 1 : 0,
+    created_at: row.created_at,
+  };
 }
 
-export async function createSession(staffId: string, role: Role) {
-  const token = await new SignJWT({ sub: staffId, role })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime(`${SESSION_HOURS}h`)
-    .sign(secret());
+/** Load the clinic authorisation profile for a Supabase Auth user id. */
+export async function getStaffProfile(userId: string): Promise<StaffUser | null> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("staff")
+    .select("id, name, email, role, title, active, created_at")
+    .eq("id", userId)
+    .maybeSingle();
 
-  const cookieStore = await cookies();
-  cookieStore.set(COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: SESSION_HOURS * 60 * 60,
-  });
+  if (error || !data) return null;
+  return mapStaff(data as StaffRow);
 }
 
-export async function destroySession() {
-  const cookieStore = await cookies();
-  cookieStore.delete(COOKIE_NAME);
-}
-
+/**
+ * Resolve the signed-in staff member from the Supabase session. Roles are
+ * always read from public.staff; a role supplied by the browser is never used.
+ */
 export const getCurrentUser = cache(async (): Promise<StaffUser | null> => {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(COOKIE_NAME)?.value;
-  if (!token) return null;
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
 
-  try {
-    const { payload } = await jwtVerify(token, secret());
-    if (!payload.sub) return null;
-    const user = db
-      .prepare(
-        "SELECT id, name, email, role, title, active, created_at FROM staff WHERE id = ? AND active = 1",
-      )
-      .get(payload.sub) as StaffUser | undefined;
-    return user ?? null;
-  } catch {
-    return null;
-  }
+  if (error || !user) return null;
+
+  const staff = await getStaffProfile(user.id);
+  if (!staff || !staff.active) return null;
+  return staff;
 });
 
 export async function requireUser() {
@@ -85,18 +82,7 @@ export async function requireStaffApi(...roles: Role[]) {
   return user;
 }
 
-export function verifyPassword(password: string, hash: string) {
-  return bcryptCompare(password, hash);
-}
-
-function bcryptCompare(password: string, hash: string) {
-  return bcrypt.compareSync(password, hash);
-}
-
-export function hashPassword(password: string) {
-  return bcrypt.hashSync(password, 10);
-}
-
-export function touchStaffLogin(staffId: string) {
-  db.prepare("UPDATE staff SET updated_at = ? WHERE id = ?").run(nowIso(), staffId);
+export async function touchStaffLogin(staffId: string) {
+  const supabase = await createClient();
+  await supabase.from("staff").update({ updated_at: nowIso() }).eq("id", staffId);
 }

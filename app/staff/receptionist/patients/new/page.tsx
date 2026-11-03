@@ -27,7 +27,7 @@ type Params = {
 export default async function RegisterPatientPage({ searchParams }: { searchParams: Promise<Params> }) {
   await requireRole("receptionist");
   const params = await searchParams;
-  const appointment = params.appointmentId ? getAppointment(params.appointmentId) : undefined;
+  const appointment = params.appointmentId ? await getAppointment(params.appointmentId) : undefined;
   const currentQuery = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value && key !== "error" && key !== "success") currentQuery.set(key, value);

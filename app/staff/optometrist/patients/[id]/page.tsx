@@ -45,7 +45,7 @@ export default async function OptometristPatientCard({
   const user = await requireRole("eye_doctor");
   const { id } = await params;
   const flash = await searchParams;
-  const patient = getPatient(id);
+  const patient = await getPatient(id);
   if (!patient) notFound();
 
   await logAudit({
@@ -59,11 +59,11 @@ export default async function OptometristPatientCard({
     details: `Viewed optical patient card for ${patient.patient_number}.`,
   });
 
-  const opticalVisits = getOpticalVisits(patient.id);
-  const prescriptions = getOpticalPrescriptions(patient.id);
-  const upcoming = getUpcomingAppointmentsForPatient(patient.id).filter((appointment) => appointment.department === "optical");
-  const vitals = getLatestVitals(patient.id);
-  const activeVisit = getActiveVisit(patient.id, "optical");
+  const opticalVisits = await getOpticalVisits(patient.id);
+  const prescriptions = await getOpticalPrescriptions(patient.id);
+  const upcoming = (await getUpcomingAppointmentsForPatient(patient.id)).filter((appointment) => appointment.department === "optical");
+  const vitals = await getLatestVitals(patient.id);
+  const activeVisit = await getActiveVisit(patient.id, "optical");
   const activeOpticalVisit = activeVisit ? opticalVisits.find((visit) => visit.visit_id === activeVisit.id) : undefined;
   const latestPrescription = prescriptions[0];
 

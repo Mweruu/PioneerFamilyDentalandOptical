@@ -21,7 +21,7 @@ export default async function AdminServicesPage({
 }) {
   await requireRole("admin");
   const params = await searchParams;
-  const services = getServices(undefined, false);
+  const services = await getServices(undefined, false);
   const dental = services.filter((service) => service.department === "dental");
   const optical = services.filter((service) => service.department === "optical");
 

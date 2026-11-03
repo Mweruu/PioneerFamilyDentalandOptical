@@ -46,7 +46,7 @@ export default async function DentalConsultationPage({
   const user = await requireRole("dentist");
   const { id } = await params;
   const flash = await searchParams;
-  const dentalVisit = getDentalVisit(id);
+  const dentalVisit = await getDentalVisit(id);
   if (!dentalVisit) notFound();
   if (dentalVisit.doctor_id !== user.id) {
     redirect(`/staff/dentist/patients/${dentalVisit.patient_id}?error=${encodeURIComponent("You can only edit dental records you created.")}`);
@@ -63,13 +63,13 @@ export default async function DentalConsultationPage({
     details: "Opened dental consultation record.",
   });
 
-  const patient = getPatient(dentalVisit.patient_id);
+  const patient = await getPatient(dentalVisit.patient_id);
   if (!patient) notFound();
-  const visit = dentalVisit.visit_id ? getVisit(dentalVisit.visit_id) : undefined;
-  const appointment = dentalVisit.visit_id ? getAppointmentForVisit(dentalVisit.visit_id) : undefined;
-  const vitals = getLatestVitals(patient.id);
-  const findings = getToothFindings(patient.id, dentalVisit.id);
-  const plans = getTreatmentPlans(patient.id).filter((plan) => plan.dental_visit_id === dentalVisit.id);
+  const visit = dentalVisit.visit_id ? await getVisit(dentalVisit.visit_id) : undefined;
+  const appointment = dentalVisit.visit_id ? await getAppointmentForVisit(dentalVisit.visit_id) : undefined;
+  const vitals = await getLatestVitals(patient.id);
+  const findings = await getToothFindings(patient.id, dentalVisit.id);
+  const plans = (await getTreatmentPlans(patient.id)).filter((plan) => plan.dental_visit_id === dentalVisit.id);
   const returnTo = `/staff/dentist/consultations/${dentalVisit.id}`;
   const completed = visit?.status === "Completed";
 

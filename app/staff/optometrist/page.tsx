@@ -52,12 +52,12 @@ export default async function OptometristDashboard({
   const user = await requireRole("eye_doctor");
   const params = await searchParams;
   const today = clinicToday();
-  const appointments = getAppointments({ doctorId: user.id, date: today, department: "optical" });
-  const counts = getDashboardCounts(today, { doctorId: user.id, department: "optical" });
-  const waiting = getWaitingPatients("optical", user.id);
-  const inConsultation = getInConsultation("optical", user.id);
-  const followUps = (getFollowUpsDue("optical") as OpticalFollowUp[]).filter((visit) => visit.doctor_id === user.id);
-  const recentPatients = getRecentPatients(user.id, "optical", 5);
+  const appointments = await getAppointments({ doctorId: user.id, date: today, department: "optical" });
+  const counts = await getDashboardCounts(today, { doctorId: user.id, department: "optical" });
+  const waiting = await getWaitingPatients("optical", user.id);
+  const inConsultation = await getInConsultation("optical", user.id);
+  const followUps = ((await getFollowUpsDue("optical")) as OpticalFollowUp[]).filter((visit) => visit.doctor_id === user.id);
+  const recentPatients = await getRecentPatients(user.id, "optical", 5);
   const nextAppointments = appointments.filter((appointment) =>
     ["Booked", "Confirmed", "Checked In", "Waiting for Doctor"].includes(appointment.status),
   );

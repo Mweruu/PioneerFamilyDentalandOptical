@@ -37,9 +37,9 @@ export function SiteHeader() {
           ))}
         </nav>
         <div className="hidden items-center gap-2 sm:flex">
-          <a href="tel:+254712345678" className="btn-ghost text-xs">
+          <a href="tel:+254705188578" className="btn-ghost text-xs">
             <Phone className="h-4 w-4" aria-hidden />
-            +254 712 345 678
+            +254 705 188 578
           </a>
           <Link href="/book" className="btn-primary">
             <CalendarCheck className="h-4 w-4" aria-hidden />
@@ -82,7 +82,7 @@ export function SiteHeader() {
                 <CalendarCheck className="h-4 w-4" aria-hidden />
                 Book an appointment
               </Link>
-              <a href="tel:+254712345678" className="btn-secondary w-full">
+              <a href="tel:+254705188578" className="btn-secondary w-full">
                 <Phone className="h-4 w-4" aria-hidden />
                 Call the clinic
               </a>

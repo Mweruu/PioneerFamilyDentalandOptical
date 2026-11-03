@@ -24,11 +24,6 @@ yarn-error.log*
 .env
 .env*.local
 
-# local SQLite database (contains patient data — never commit)
-/data/*.db
-/data/*.db-shm
-/data/*.db-wal
-
 # typescript
 *.tsbuildinfo
 next-env.d.ts

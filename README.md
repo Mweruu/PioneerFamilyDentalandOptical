@@ -2,7 +2,7 @@
 
 A complete clinic management system for a combined dental and optical practice in Kenya. It covers public appointment booking, secure staff authentication with four roles, reception and triage, dental charting, eye examinations and spectacle prescriptions, administration, reporting, notifications, and audit logging.
 
-Built with **Next.js 16 (App Router)**, **React 19**, **TypeScript**, and **Tailwind CSS**. The working demo uses a real local **SQLite** database through `better-sqlite3`; a **Supabase/PostgreSQL schema with Row Level Security** is included as the production deployment blueprint.
+Built with **Next.js 16 (App Router)**, **React 19**, **TypeScript**, **Tailwind CSS**, and **Supabase** (PostgreSQL, Auth, and Row Level Security).
 
 ---
 
@@ -10,19 +10,19 @@ Built with **Next.js 16 (App Router)**, **React 19**, **TypeScript**, and **Tail
 
 ```bash
 npm install
-cp .env.example .env.local   # set SESSION_SECRET before production
+cp .env.example .env.local   # add your Supabase URL + publishable key
 npm run dev                  # http://localhost:3000
 npm run build                # production build
 npm start                    # serve the production build
 ```
 
-The database is created automatically at `data/clinic.db` on first run and seeded with demo staff, patients, appointments, clinical records, and schedules. Delete that file to reset the demo data.
+The app stores everything in Supabase (PostgreSQL + Auth). Apply the schema once with `supabase/apply_all.sql` (see [Supabase setup](#supabase-setup)), then optionally run `supabase/seed.sql` for demo data.
 
-Create `.env.local` from `.env.example` before deploying. At minimum set a strong `SESSION_SECRET` and the correct `NEXT_PUBLIC_APP_URL`. In production the app refuses to sign sessions if `SESSION_SECRET` is missing, so the demo fallback cannot leak into a live deployment.
+Create `.env.local` from `.env.example` before deploying. The minimum is `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`; add `SUPABASE_SERVICE_ROLE_KEY` if you want the admin UI to create staff accounts through the Auth admin API. Set `NEXT_PUBLIC_APP_URL` so password-reset emails link back to the right host.
 
 ### Demo accounts
 
-These accounts are seeded for evaluation. **Remove them before production** (delete the seed block in `lib/db.ts` and provision real staff through Supabase Auth or the admin UI).
+These accounts come from `supabase/seed.sql`. **Remove or change them before production** (do not run the seed against a live clinic, and provision real staff through Supabase Auth or the admin UI).
 
 | Role | Email | Password |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ These accounts are seeded for evaluation. **Remove them before production** (del
 | Dentist | `dentist2@pioneerclinic.co.ke` | `Dentist@123` |
 | Eye Doctor | `optometrist@pioneerclinic.co.ke` | `Optical@123` |
 
-Demo patients: `PFC-2026-0001` Mary Wambui, `PFC-2026-0002` Peter Mwangi, `PFC-2026-0003` Aisha Noor, `PFC-2026-0004` Daniel Kipchoge. Demo appointment references are `PF-DEMO-1001` to `PF-DEMO-1004`.
+Demo patients are created through the app (public booking or reception). Keep the seeded staff accounts for evaluation only.
 
 ---
 
@@ -95,14 +95,16 @@ app/                     Routes (public, auth, staff role areas)
   staff/admin/           Staff, services, schedules, reports, audit, notifications, settings
 components/              Public, auth, staff, and shared UI components
 lib/
-  db.ts                  SQLite schema, migrations, and demo seed
-  data/queries.ts        All reusable read queries
+  data/queries.ts        All reusable read queries (Supabase)
   actions/               Server actions grouped by domain
-  auth.ts                JWT cookie sessions, role guards, password hashing
+  auth.ts                Supabase session + clinic role guards
   audit.ts               Audit logging
   notifications.ts       SMS (Africa's Talking) and email (Resend) delivery
   types.ts               Domain types and clinical constants
-supabase/migrations/     PostgreSQL schema + RLS deployment blueprint
+  supabase/             Browser, server and service-role Supabase clients
+supabase/migrations/     PostgreSQL schema + RLS (0001-0003)
+supabase/apply_all.sql   Combined copy of the migrations for the SQL Editor
+supabase/seed.sql        Optional demo staff, settings, services, schedules
 ```
 
 ### Data model
@@ -125,27 +127,35 @@ Dental and optical records share the patient identity but stay in separate clini
 
 - **Server-side authorisation on every request.** Pages use `requireRole(...)`; server actions use `requireStaffApi(...)`. Hiding a link is never the access control.
 - **Assigned role verification.** The login form's role selector is only a convenience check. The authoritative role comes from the `staff` row; a mismatch is rejected and logged as `auth.role_mismatch`.
-- **JWT session cookies** signed with HS256 (`jose`), `httpOnly`, `sameSite=lax`, `secure` in production, and an 8-hour expiry. Deactivated accounts are rejected on every request because the user is re-read from the database.
-- **Password hashing** with bcrypt (cost 10). Password reset tokens are SHA-256 hashed at rest, expire after 30 minutes, and are single-use.
+- **Supabase Auth sessions** stored in `httpOnly`, `sameSite=lax` cookies (`secure` in production) and refreshed by the proxy on each request. Deactivated accounts are rejected because the `staff` profile is re-read on every request.
+- **Password handling** is delegated to Supabase Auth. Reset links use the `/auth/confirm` route and require an active `staff` profile before the password can be changed.
 - **Least privilege.** Reception cannot open clinical records. Dentists and eye doctors only see their own department's clinical data and can only edit records they created. Administrators cannot read clinical notes.
 - **Audit logging.** Sign-in, role mismatches, patient changes, appointment changes, clinical edits, prescriptions, staff changes, and settings changes are recorded with actor, role, entity, patient, and timestamp.
 - **Input validation** with Zod and explicit length/range checks in server actions.
 - **Double-booking prevention** with overlap checks plus a database-level partial unique index.
 - **Privacy.** The public privacy notice covers lawful basis, data minimisation, retention, patient rights, and contact details under the Kenya Data Protection Act, 2019.
 
-### Supabase blueprint
+### Supabase setup
 
-`supabase/migrations/0001_schema.sql` creates the PostgreSQL schema and `0002_rls.sql` enables RLS with helper functions and policies:
+The app uses Supabase for both PostgreSQL and Auth. `supabase/migrations/0001_schema.sql` creates the schema, `0002_rls.sql` enables RLS with helper functions and policies, and `0003_supabase_app_rpcs.sql` adds the narrowly-scoped public/admin RPCs used by the app.
+
+1. Open your project's **SQL Editor**.
+2. Paste the whole of `supabase/apply_all.sql` and run it once.
+3. Optional demo data: paste and run `supabase/seed.sql`. This creates the demo accounts listed above.
+4. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in `.env.local`.
+5. Visit `/supabase-test` to confirm the tables are visible.
+
+To add a real staff member: create the user in **Authentication → Users**, then insert a matching row in `public.staff` with the same `id` and the correct `role`. Alternatively, set `SUPABASE_SERVICE_ROLE_KEY` and use **Admin → Staff** in the app.
+
+Security model:
 
 - Staff read their own profile; only admins manage staff.
 - Reception/admin manage patients, appointments, visits, and vitals.
 - Dentists read shared dental history but write only their own records.
 - Eye doctors have the equivalent optical boundary.
 - Admins read audit logs; audit rows are append-only.
-- Public (anon) has no table access. Public booking and lookup run server-side with the service role after validation.
+- Public (anon) has no direct table access; booking and lookup use the SECURITY DEFINER RPCs in `0003`.
 - A trigger stops clinicians from rescheduling or reassigning appointments.
-
-To deploy: create a Supabase project, run `supabase db push`, create staff in Supabase Auth, then insert matching `public.staff` rows with the correct role. The current demo does not import a Supabase client because no project credentials were available; the local SQLite implementation is fully functional.
 
 ---
 
@@ -180,11 +190,11 @@ The production build passes with `npm run build`. The following workflows are in
 
 ## Production checklist
 
-- [ ] Replace the demo seed and remove the demo account panel from `/login`.
-- [ ] Set a strong, unique `SESSION_SECRET` and `NEXT_PUBLIC_APP_URL`.
-- [ ] Move to Supabase Postgres/Auth and apply both migrations.
+- [ ] Do not run `supabase/seed.sql` against production; create real staff through Supabase Auth or the admin UI.
+- [ ] Set the correct `NEXT_PUBLIC_APP_URL` and `NEXT_PUBLIC_SUPABASE_*` values.
+- [ ] Apply all migrations in `supabase/migrations` (0001–0004).
 - [ ] Configure SMS and email providers and verify sender IDs.
-- [ ] Serve over HTTPS so session cookies are marked `secure`.
+- [ ] Serve over HTTPS so auth cookies are marked `secure`.
 - [ ] Back up the database and define a retention schedule.
 - [ ] Review the privacy notice with the clinic's data protection officer.
 - [ ] Register as a data controller/processor with the ODPC where required.

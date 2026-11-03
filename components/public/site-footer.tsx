@@ -22,7 +22,7 @@ export function SiteFooter() {
           <ul className="mt-4 space-y-3 text-sm">
             <li className="flex gap-2.5">
               <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-teal-300" aria-hidden />
-              <span>Pioneer Plaza, 2nd Floor<br />Ngong Road, Nairobi</span>
+              <span>Buruburu Phase 1<br />Along Outering Road Junction (opposite the bus terminus), Nairobi</span>
             </li>
             <li className="flex gap-2.5">
               <Phone className="mt-0.5 h-4 w-4 shrink-0 text-teal-300" aria-hidden />
@@ -40,15 +40,15 @@ export function SiteFooter() {
           <ul className="mt-4 space-y-2.5 text-sm">
             <li className="flex items-start gap-2.5">
               <Clock className="mt-0.5 h-4 w-4 shrink-0 text-teal-300" aria-hidden />
-              <span>Monday – Friday<br /><strong className="font-semibold text-white">8:00 AM – 5:00 PM</strong></span>
+              <span>Monday – Friday<br /><strong className="font-semibold text-white">8:00 AM – 8:00 PM</strong></span>
             </li>
             <li className="flex items-start gap-2.5">
               <Clock className="mt-0.5 h-4 w-4 shrink-0 text-teal-300" aria-hidden />
-              <span>Saturday<br /><strong className="font-semibold text-white">8:00 AM – 2:00 PM</strong></span>
+              <span>Saturday &amp; public holidays<br /><strong className="font-semibold text-white">8:00 AM – 6:00 PM</strong></span>
             </li>
             <li className="flex items-start gap-2.5">
               <Clock className="mt-0.5 h-4 w-4 shrink-0 text-teal-300" aria-hidden />
-              <span>Sunday &amp; public holidays<br /><strong className="font-semibold text-white">Closed</strong></span>
+              <span>Sunday<br /><strong className="font-semibold text-white">Closed</strong></span>
             </li>
           </ul>
         </div>

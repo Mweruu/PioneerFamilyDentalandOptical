@@ -21,9 +21,9 @@ export default async function AdminNotificationsPage({
 }) {
   await requireRole("admin");
   const params = await searchParams;
-  const settings = getSettings();
-  const notifications = getNotificationRows(60);
-  const upcoming = getAppointments({ fromDate: clinicToday(), limit: 60 }).filter(
+  const settings = await getSettings();
+  const notifications = await getNotificationRows(60);
+  const upcoming = (await getAppointments({ fromDate: clinicToday(), limit: 60 })).filter(
     (appointment) => !["Cancelled", "No Show", "Completed"].includes(appointment.status),
   );
   const smsEnabled = settings.notification_sms_enabled === "true";

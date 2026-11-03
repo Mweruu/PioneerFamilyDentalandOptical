@@ -36,13 +36,13 @@ export default async function ReceptionistDashboard({
   const user = await requireRole("receptionist");
   const params = await searchParams;
   const today = clinicToday();
-  const appointments = getTodayAppointments();
-  const counts = getDashboardCounts(today);
-  const queue = [...getWaitingPatients("dental"), ...getWaitingPatients("optical")].sort((a, b) =>
+  const appointments = await getTodayAppointments();
+  const counts = await getDashboardCounts(today);
+  const queue = [...(await getWaitingPatients("dental")), ...(await getWaitingPatients("optical"))].sort((a, b) =>
     a.appointment_time.localeCompare(b.appointment_time),
   );
   const unlinked = appointments.filter((appointment) => !appointment.patient_id);
-  const recentPatients = listPatients(6);
+  const recentPatients = await listPatients(6);
 
   return (
     <div>

@@ -39,12 +39,12 @@ export default async function AdminOverviewPage({
   const user = await requireRole("admin");
   const params = await searchParams;
   const today = clinicToday();
-  const overview = getAdminOverview(today);
-  const trend = getAppointmentTrend(7);
-  const staff = getStaffList();
-  const followUps = getFollowUpsDue();
-  const notifications = getNotificationRows(8);
-  const upcoming = getAppointments({ fromDate: today, limit: 8 });
+  const overview = await getAdminOverview(today);
+  const trend = await getAppointmentTrend(7);
+  const staff = await getStaffList();
+  const followUps = await getFollowUpsDue();
+  const notifications = await getNotificationRows(8);
+  const upcoming = await getAppointments({ fromDate: today, limit: 8 });
   const maxTrend = Math.max(1, ...trend.map((day) => day.count));
   const failed = notifications.filter((row) => row.status === "failed").length;
   const notConfigured = notifications.filter((row) => row.status === "not_configured").length;

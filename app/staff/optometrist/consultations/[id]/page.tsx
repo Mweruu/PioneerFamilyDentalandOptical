@@ -75,7 +75,7 @@ export default async function OpticalConsultationPage({
   const user = await requireRole("eye_doctor");
   const { id } = await params;
   const flash = await searchParams;
-  const opticalVisit = getOpticalVisit(id);
+  const opticalVisit = await getOpticalVisit(id);
   if (!opticalVisit) notFound();
   if (opticalVisit.doctor_id !== user.id) {
     redirect(`/staff/optometrist/patients/${opticalVisit.patient_id}?error=${encodeURIComponent("You can only edit optical records you created.")}`);
@@ -92,12 +92,12 @@ export default async function OpticalConsultationPage({
     details: "Opened optical examination record.",
   });
 
-  const patient = getPatient(opticalVisit.patient_id);
+  const patient = await getPatient(opticalVisit.patient_id);
   if (!patient) notFound();
-  const visit = opticalVisit.visit_id ? getVisit(opticalVisit.visit_id) : undefined;
-  const appointment = opticalVisit.visit_id ? getAppointmentForVisit(opticalVisit.visit_id) : undefined;
-  const vitals = getLatestVitals(patient.id);
-  const prescriptions = getOpticalPrescriptions(patient.id);
+  const visit = opticalVisit.visit_id ? await getVisit(opticalVisit.visit_id) : undefined;
+  const appointment = opticalVisit.visit_id ? await getAppointmentForVisit(opticalVisit.visit_id) : undefined;
+  const vitals = await getLatestVitals(patient.id);
+  const prescriptions = await getOpticalPrescriptions(patient.id);
   const visitPrescriptions = prescriptions.filter((rx) => rx.optical_visit_id === opticalVisit.id);
   const previousPrescription = prescriptions.find((rx) => rx.optical_visit_id !== opticalVisit.id);
   const symptoms = safeJson<string[]>(opticalVisit.symptoms, []);

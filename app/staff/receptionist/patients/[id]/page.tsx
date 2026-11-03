@@ -44,15 +44,15 @@ export default async function ReceptionPatientDetailPage({
   await requireRole("receptionist");
   const { id } = await params;
   const flash = await searchParams;
-  const patient = getPatient(id);
+  const patient = await getPatient(id);
   if (!patient) notFound();
 
-  const appointments = getAppointmentsForPatient(patient.id);
-  const vitals = getVitalsForPatient(patient.id);
-  const visits = getVisitsForPatient(patient.id);
+  const appointments = await getAppointmentsForPatient(patient.id);
+  const vitals = await getVitalsForPatient(patient.id);
+  const visits = await getVisitsForPatient(patient.id);
   const activeVisits = [
-    { department: "dental" as const, visit: getActiveVisit(patient.id, "dental") },
-    { department: "optical" as const, visit: getActiveVisit(patient.id, "optical") },
+    { department: "dental" as const, visit: await getActiveVisit(patient.id, "dental") },
+    { department: "optical" as const, visit: await getActiveVisit(patient.id, "optical") },
   ].filter((entry) => entry.visit);
   const activeVisitIds = new Set(activeVisits.map((entry) => entry.visit?.id));
   const recentVisits = visits.slice(0, 8);

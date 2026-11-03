@@ -21,10 +21,10 @@ export default async function AdminReportsPage({
   await requireRole("admin");
   const params = await searchParams;
   const date = params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : clinicToday();
-  const reports = getReports(date);
-  const counts = getDashboardCounts(date);
-  const trend = getAppointmentTrend(14);
-  const followUps = getFollowUpsDue();
+  const reports = await getReports(date);
+  const counts = await getDashboardCounts(date);
+  const trend = await getAppointmentTrend(14);
+  const followUps = await getFollowUpsDue();
   const totalAppointments = reports.daily.reduce((sum, row) => sum + row.count, 0);
   const completed = reports.daily.filter((row) => row.status === "Completed").reduce((sum, row) => sum + row.count, 0);
   const completionRate = totalAppointments ? Math.round((completed / totalAppointments) * 100) : 0;

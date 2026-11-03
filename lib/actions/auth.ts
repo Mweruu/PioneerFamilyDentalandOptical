@@ -2,22 +2,12 @@
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
-import { db } from "../db";
-import {
-  createSession,
-  destroySession,
-  getCurrentUser,
-  hashPassword,
-  touchStaffLogin,
-  verifyPassword,
-} from "../auth";
+import { createClient } from "../supabase/server";
+import { getCurrentUser, getStaffProfile, touchStaffLogin } from "../auth";
 import { logAudit } from "../audit";
-import { queuePasswordResetNotification } from "../notifications";
 import type { Role } from "../types";
 import { ROLE_HOME } from "../types";
-import { nowIso } from "../utils";
 
 export type AuthState = { error?: string; success?: string } | null;
 
@@ -26,6 +16,13 @@ const loginSchema = z.object({
   email: z.string().email("Enter a valid email address."),
   password: z.string().min(1, "Enter your password."),
 });
+
+async function appBaseUrl() {
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto") || "http";
+  const host = h.get("host") || "localhost:3000";
+  return process.env.NEXT_PUBLIC_APP_URL || `${proto}://${host}`;
+}
 
 export async function loginAction(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const parsed = loginSchema.safeParse({
@@ -38,25 +35,48 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
     return { error: parsed.error.issues[0]?.message ?? "Check the login details." };
   }
 
-  const staff = db
-    .prepare("SELECT * FROM staff WHERE email = ? COLLATE NOCASE")
-    .get(parsed.data.email.trim()) as
+  const email = parsed.data.email.trim().toLowerCase();
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password: parsed.data.password,
+  });
+
+  if (error || !data.user) {
+    await logAudit({
+      publicEvent: true,
+      action: "auth.login_failed",
+      details: `Failed login attempt for ${email}.`,
+    });
+    return { error: "Incorrect email or password." };
+  }
+
+  const { data: profile } = await supabase
+    .from("staff")
+    .select("id, name, email, role, title, active, created_at")
+    .eq("id", data.user.id)
+    .maybeSingle();
+
+  const staff = profile as
     | {
         id: string;
         name: string;
         email: string;
-        password_hash: string;
         role: Role;
-        active: number;
+        title: string | null;
+        active: boolean;
+        created_at: string;
       }
-    | undefined;
+    | null;
 
-  if (!staff || !verifyPassword(parsed.data.password, staff.password_hash)) {
+  if (!staff) {
+    await supabase.auth.signOut();
     await logAudit({
-      action: "auth.login_failed",
-      details: `Failed login attempt for ${parsed.data.email}.`,
+      publicEvent: true,
+      action: "auth.login_unprovisioned",
+      details: `Authenticated user ${email} has no clinic staff profile.`,
     });
-    return { error: "Incorrect email or password." };
+    return { error: "This account is not linked to a clinic staff profile. Contact the clinic administrator." };
   }
 
   if (!staff.active) {
@@ -67,6 +87,7 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
       action: "auth.login_deactivated",
       details: "Deactivated account attempted to sign in.",
     });
+    await supabase.auth.signOut();
     return { error: "This staff account is deactivated. Contact the clinic administrator." };
   }
 
@@ -78,13 +99,13 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
       action: "auth.role_mismatch",
       details: `Account attempted to sign in as ${parsed.data.role} but is assigned ${staff.role}.`,
     });
+    await supabase.auth.signOut();
     return {
       error: `The selected role does not match this account. This account is assigned the ${staff.role.replaceAll("_", " ")} role.`,
     };
   }
 
-  await createSession(staff.id, staff.role);
-  touchStaffLogin(staff.id);
+  await touchStaffLogin(staff.id);
   await logAudit({
     actorId: staff.id,
     actorName: staff.name,
@@ -92,6 +113,7 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
     action: "auth.login",
     details: "Staff signed in.",
   });
+
   redirect(ROLE_HOME[staff.role]);
 }
 
@@ -106,7 +128,9 @@ export async function logoutAction() {
       details: "Staff signed out.",
     });
   }
-  await destroySession();
+
+  const supabase = await createClient();
+  await supabase.auth.signOut();
   redirect("/login");
 }
 
@@ -121,45 +145,40 @@ export async function requestPasswordResetAction(
   const parsed = resetRequestSchema.safeParse({ email: formData.get("email") });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Enter a valid email." };
 
-  const staff = db
-    .prepare("SELECT id, name, email, role, active FROM staff WHERE email = ? COLLATE NOCASE")
-    .get(parsed.data.email.trim()) as
-    | { id: string; name: string; email: string; role: Role; active: number }
-    | undefined;
+  const email = parsed.data.email.trim().toLowerCase();
+  const supabase = await createClient();
+  const base = await appBaseUrl();
+
+  // Supabase always responds successfully for unknown addresses, which avoids
+  // leaking whether a staff account exists.
+  await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${base}/auth/confirm?next=/reset-password`,
+  });
+
+  const { data: staff } = await supabase
+    .from("staff")
+    .select("id, name, role, active")
+    .eq("email", email)
+    .maybeSingle();
 
   if (staff?.active) {
-    const token = randomBytes(32).toString("hex");
-    const tokenHash = createHash("sha256").update(token).digest("hex");
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-    db.prepare(`
-      INSERT INTO password_reset_tokens (id, staff_id, token_hash, expires_at, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(crypto.randomUUID(), staff.id, tokenHash, expiresAt, nowIso());
-
-    const h = await headers();
-    const proto = h.get("x-forwarded-proto") || "http";
-    const host = h.get("host") || "localhost:3000";
-    const base = process.env.NEXT_PUBLIC_APP_URL || `${proto}://${host}`;
-    const resetUrl = `${base}/reset-password?token=${token}`;
-    await queuePasswordResetNotification(staff.email, staff.name, resetUrl);
     await logAudit({
-      actorId: staff.id,
-      actorName: staff.name,
-      actorRole: staff.role,
+      publicEvent: true,
       action: "auth.password_reset_requested",
-      details: "Password reset requested.",
+      entityType: "staff",
+      entityId: staff.id,
+      details: `Password reset requested for ${staff.name}.`,
     });
   }
 
   return {
     success:
-      "If that email belongs to an active staff account, a reset link has been queued. Contact the clinic administrator if it does not arrive.",
+      "If that email belongs to an active staff account, a reset link has been sent. Contact the clinic administrator if it does not arrive.",
   };
 }
 
 const resetSchema = z
   .object({
-    token: z.string().min(20, "This reset link is invalid."),
     password: z
       .string()
       .min(10, "Use at least 10 characters.")
@@ -175,52 +194,37 @@ const resetSchema = z
 
 export async function resetPasswordAction(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const parsed = resetSchema.safeParse({
-    token: formData.get("token"),
     password: formData.get("password"),
     confirm: formData.get("confirm"),
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the form." };
 
-  const tokenHash = createHash("sha256").update(parsed.data.token).digest("hex");
-  const record = db
-    .prepare(`
-      SELECT prt.id, prt.staff_id, prt.expires_at, prt.used_at, s.name, s.role, s.active
-      FROM password_reset_tokens prt JOIN staff s ON s.id = prt.staff_id
-      WHERE prt.token_hash = ?
-    `)
-    .get(tokenHash) as
-    | {
-        id: string;
-        staff_id: string;
-        expires_at: string;
-        used_at: string | null;
-        name: string;
-        role: Role;
-        active: number;
-      }
-    | undefined;
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  if (!record || record.used_at || new Date(record.expires_at).getTime() < Date.now() || !record.active) {
+  if (!user) {
     return { error: "This reset link is invalid or has expired. Request a new one." };
   }
 
-  const now = nowIso();
-  db.transaction(() => {
-    db.prepare("UPDATE staff SET password_hash = ?, updated_at = ? WHERE id = ?").run(
-      hashPassword(parsed.data.password),
-      now,
-      record.staff_id,
-    );
-    db.prepare("UPDATE password_reset_tokens SET used_at = ? WHERE id = ?").run(now, record.id);
-  })();
+  const staff = await getStaffProfile(user.id);
+  if (!staff || !staff.active) {
+    await supabase.auth.signOut();
+    return { error: "This staff account is not active. Contact the clinic administrator." };
+  }
+
+  const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
+  if (error) return { error: error.message };
 
   await logAudit({
-    actorId: record.staff_id,
-    actorName: record.name,
-    actorRole: record.role,
+    actorId: staff.id,
+    actorName: staff.name,
+    actorRole: staff.role,
     action: "auth.password_reset_completed",
     details: "Password reset completed.",
   });
 
+  await supabase.auth.signOut();
   redirect("/login?reset=1");
 }

@@ -25,7 +25,7 @@ export default async function AdminStaffPage({
   const user = await requireRole("admin");
   const params = await searchParams;
   const roleFilter = ROLES.includes(params.role as Role) ? (params.role as Role) : undefined;
-  const staff = getStaffList();
+  const staff = await getStaffList();
   const filtered = roleFilter ? staff.filter((member) => member.role === roleFilter) : staff;
   const counts = Object.fromEntries(ROLES.map((role) => [role, staff.filter((member) => member.role === role).length])) as Record<Role, number>;
 

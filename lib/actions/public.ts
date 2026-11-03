@@ -1,12 +1,11 @@
 "use server";
 
 import { z } from "zod";
-import { db } from "../db";
+import { createClient } from "../supabase/server";
 import { logAudit } from "../audit";
-import { queueAppointmentNotification } from "../notifications";
-import { getAppointmentByReference, getAvailableSlots, getDoctorSchedule, hasAppointmentOverlap } from "../data/queries";
+import { queueAppointmentNotification, type NotificationAppointment } from "../notifications";
 import type { Appointment, Department } from "../types";
-import { clinicToday, formatDate, formatTime, nowIso, reference } from "../utils";
+import { clinicToday, formatDate, formatTime } from "../utils";
 
 export type BookingResult = {
   reference: string;
@@ -25,11 +24,28 @@ export type BookingState =
     }
   | null;
 
+type PublicBookingResponse = {
+  ok: boolean;
+  error?: string;
+  id?: string;
+  reference?: string;
+  date?: string;
+  time?: string;
+  department?: Department;
+  doctor_name?: string;
+  full_name?: string;
+  phone?: string;
+  email?: string | null;
+  patient_id?: string | null;
+};
+
 const bookingSchema = z.object({
   fullName: z.string().trim().min(2, "Enter the patient's full name.").max(120),
   phone: z.string().trim().min(7, "Enter a valid phone number.").max(30),
   email: z.union([z.string().trim().email("Enter a valid email address."), z.literal("")]).optional(),
-  dateOfBirth: z.union([z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid date of birth."), z.literal("")]).optional(),
+  dateOfBirth: z
+    .union([z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid date of birth."), z.literal("")])
+    .optional(),
   gender: z.string().trim().max(30).optional(),
   department: z.enum(["dental", "optical"]),
   doctorId: z.string().min(1, "Select a doctor."),
@@ -40,6 +56,20 @@ const bookingSchema = z.object({
   patientType: z.enum(["new", "returning"]),
   notes: z.string().trim().max(1000).optional(),
 });
+
+function notificationAppointment(data: PublicBookingResponse): NotificationAppointment {
+  return {
+    id: data.id!,
+    reference: data.reference!,
+    full_name: data.full_name!,
+    phone: data.phone!,
+    email: data.email ?? null,
+    department: data.department!,
+    appointment_date: data.date!,
+    appointment_time: data.time!,
+    doctor_name: data.doctor_name ?? "the clinic",
+  };
+}
 
 export async function bookAppointmentAction(_prev: BookingState, formData: FormData): Promise<BookingState> {
   const parsed = bookingSchema.safeParse({
@@ -65,89 +95,51 @@ export async function bookAppointmentAction(_prev: BookingState, formData: FormD
   const data = parsed.data;
   if (data.date < clinicToday()) return { error: "Choose today or a future date." };
 
-  const doctor = db
-    .prepare("SELECT id, name, role, active FROM staff WHERE id = ?")
-    .get(data.doctorId) as { id: string; name: string; role: string; active: number } | undefined;
-  const expectedRole = data.department === "dental" ? "dentist" : "eye_doctor";
-  if (!doctor || !doctor.active || doctor.role !== expectedRole) {
-    return { error: "The selected doctor is not available for this appointment type." };
-  }
+  const supabase = await createClient();
+  const { data: result, error } = await supabase.rpc("public_book_appointment", {
+    p_full_name: data.fullName,
+    p_phone: data.phone,
+    p_email: data.email || null,
+    p_date_of_birth: data.dateOfBirth || null,
+    p_gender: data.gender || null,
+    p_department: data.department,
+    p_doctor_id: data.doctorId,
+    p_service_id: data.serviceId,
+    p_date: data.date,
+    p_time: data.time,
+    p_reason: data.reason,
+    p_patient_type: data.patientType,
+    p_notes: data.notes || null,
+  });
 
-  const service = db
-    .prepare("SELECT id, name, duration_minutes, department, active FROM services WHERE id = ?")
-    .get(data.serviceId) as
-    | { id: string; name: string; duration_minutes: number; department: string; active: number }
-    | undefined;
-  if (!service || !service.active || service.department !== data.department) {
-    return { error: "The selected service is not available." };
-  }
-
-  const schedule = getDoctorSchedule(doctor.id, data.date);
-  if (!schedule) return { error: "The doctor does not have a clinic session on that day. Choose another date." };
-
-  const duration = service.duration_minutes;
-  const slots = getAvailableSlots(doctor.id, data.date, duration);
-  const slot = slots.find((s) => s.time === data.time);
-  if (!slot || !slot.available) {
-    return { error: "That time has just been taken. Please choose another available time." };
-  }
-
-  if (hasAppointmentOverlap(doctor.id, data.date, data.time, duration)) {
-    return { error: "That appointment slot overlaps with an existing booking. Please choose another time." };
-  }
-
-  const id = crypto.randomUUID();
-  const ref = reference();
-  const now = nowIso();
-
-  try {
-    db.prepare(`
-      INSERT INTO appointments (id, reference, patient_id, full_name, phone, email, date_of_birth, gender,
-        department, doctor_id, service_id, appointment_date, appointment_time, duration_minutes, reason,
-        patient_type, notes, status, source, checked_in_at, created_at, updated_at)
-      VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Booked', 'online', NULL, ?, ?)
-    `).run(
-      id,
-      ref,
-      data.fullName,
-      data.phone,
-      data.email || null,
-      data.dateOfBirth || null,
-      data.gender || null,
-      data.department,
-      data.doctorId,
-      data.serviceId,
-      data.date,
-      data.time,
-      duration,
-      data.reason,
-      data.patientType,
-      data.notes || null,
-      now,
-      now,
-    );
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
-      return { error: "That appointment slot was just booked by someone else. Please choose another time." };
-    }
+  if (error) {
     return { error: "We could not save the appointment. Please try again or call the clinic." };
   }
 
-  await queueAppointmentNotification(id, "booking_confirmation");
+  const booking = result as PublicBookingResponse;
+  if (!booking?.ok || !booking.id || !booking.reference) {
+    return { error: booking?.error ?? "We could not save the appointment. Please try again or call the clinic." };
+  }
+
+  await queueAppointmentNotification(booking.id, "booking_confirmation", {
+    publicEvent: true,
+    appointment: notificationAppointment(booking),
+  });
   await logAudit({
+    publicEvent: true,
     action: "appointment.public_booking",
     entityType: "appointment",
-    entityId: id,
-    details: `Online booking ${ref} created for ${data.department} on ${data.date} at ${data.time}.`,
+    entityId: booking.id,
+    details: `Online booking ${booking.reference} created for ${data.department} on ${data.date} at ${data.time}.`,
   });
 
   return {
     booking: {
-      reference: ref,
+      reference: booking.reference,
       date: data.date,
       time: data.time,
       department: data.department,
-      doctorName: doctor.name,
+      doctorName: booking.doctor_name ?? "the clinic",
       phone: data.phone,
       email: data.email || null,
     },
@@ -159,6 +151,27 @@ const lookupSchema = z.object({
   fullName: z.string().trim().min(2, "Enter the full name used for the booking."),
   phone: z.string().trim().min(7, "Enter the phone number used for the booking."),
 });
+
+type LookupAppointment = {
+  id: string;
+  patient_id: string | null;
+  reference: string;
+  full_name: string;
+  phone: string;
+  email: string | null;
+  department: Department;
+  doctor_name: string;
+  date: string;
+  time: string;
+  status: string;
+  cancellable: boolean;
+};
+
+type PublicLookupResponse = {
+  ok: boolean;
+  error?: string;
+  appointment?: LookupAppointment;
+};
 
 export type LookupState =
   | {
@@ -179,19 +192,6 @@ export type LookupState =
     }
   | null;
 
-function phoneDigits(value: string) {
-  return value.replace(/\D/g, "").replace(/^254/, "0");
-}
-
-function verifyAppointment(data: { reference: string; fullName: string; phone: string }) {
-  const appointment = getAppointmentByReference(data.reference.trim().toUpperCase());
-  if (!appointment) return null;
-  const samePhone = phoneDigits(appointment.phone) === phoneDigits(data.phone);
-  const sameName = appointment.full_name.trim().toLowerCase() === data.fullName.trim().toLowerCase();
-  if (!samePhone || !sameName) return null;
-  return appointment;
-}
-
 export async function lookupAppointmentAction(_prev: LookupState, formData: FormData): Promise<LookupState> {
   const parsed = lookupSchema.safeParse({
     reference: formData.get("reference"),
@@ -200,16 +200,30 @@ export async function lookupAppointmentAction(_prev: LookupState, formData: Form
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the lookup details." };
 
-  const appointment = verifyAppointment(parsed.data);
-  if (!appointment) {
-    await logAudit({
-      action: "appointment.lookup_failed",
-      details: `Failed public lookup for reference ${parsed.data.reference}.`,
-    });
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("public_lookup_appointment", {
+    p_reference: parsed.data.reference.trim().toUpperCase(),
+    p_full_name: parsed.data.fullName,
+    p_phone: parsed.data.phone,
+  });
+
+  if (error) {
     return { error: "We could not verify an appointment with those details. Check the reference, name and phone number." };
   }
 
+  const result = data as PublicLookupResponse;
+  if (!result?.ok || !result.appointment) {
+    await logAudit({
+      publicEvent: true,
+      action: "appointment.lookup_failed",
+      details: `Failed public lookup for reference ${parsed.data.reference}.`,
+    });
+    return { error: result?.error ?? "We could not verify an appointment with those details. Check the reference, name and phone number." };
+  }
+
+  const appointment = result.appointment;
   await logAudit({
+    publicEvent: true,
     action: "appointment.public_lookup",
     entityType: "appointment",
     entityId: appointment.id,
@@ -224,10 +238,10 @@ export async function lookupAppointmentAction(_prev: LookupState, formData: Form
       phone: appointment.phone,
       department: appointment.department,
       doctorName: appointment.doctor_name,
-      date: appointment.appointment_date,
-      time: appointment.appointment_time,
+      date: appointment.date,
+      time: appointment.time,
       status: appointment.status,
-      cancellable: ["Booked", "Confirmed"].includes(appointment.status),
+      cancellable: appointment.cancellable,
     },
   };
 }
@@ -240,20 +254,39 @@ export async function cancelPublicAppointmentAction(_prev: LookupState, formData
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the cancellation details." };
 
-  const appointment = verifyAppointment(parsed.data);
-  if (!appointment) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("public_cancel_appointment", {
+    p_reference: parsed.data.reference.trim().toUpperCase(),
+    p_full_name: parsed.data.fullName,
+    p_phone: parsed.data.phone,
+  });
+
+  if (error) {
     return { error: "We could not verify that appointment. No changes were made." };
   }
-  if (!["Booked", "Confirmed"].includes(appointment.status)) {
-    return { error: "This appointment can no longer be cancelled online. Please call the clinic." };
+
+  const result = data as PublicLookupResponse;
+  if (!result?.ok || !result.appointment) {
+    return { error: result?.error ?? "We could not verify that appointment. No changes were made." };
   }
 
-  db.prepare("UPDATE appointments SET status = 'Cancelled', updated_at = ? WHERE id = ?").run(
-    nowIso(),
-    appointment.id,
-  );
-  await queueAppointmentNotification(appointment.id, "cancellation");
+  const appointment = result.appointment;
+  await queueAppointmentNotification(appointment.id, "cancellation", {
+    publicEvent: true,
+    appointment: {
+      id: appointment.id,
+      reference: appointment.reference,
+      full_name: appointment.full_name,
+      phone: appointment.phone,
+      email: appointment.email,
+      department: appointment.department,
+      appointment_date: appointment.date,
+      appointment_time: appointment.time,
+      doctor_name: appointment.doctor_name,
+    },
+  });
   await logAudit({
+    publicEvent: true,
     action: "appointment.public_cancellation",
     entityType: "appointment",
     entityId: appointment.id,
@@ -263,13 +296,22 @@ export async function cancelPublicAppointmentAction(_prev: LookupState, formData
 
   return {
     cancelled: true,
-    message: `Appointment ${appointment.reference} on ${formatDate(appointment.appointment_date)} at ${formatTime(appointment.appointment_time)} has been cancelled.`,
+    message: `Appointment ${appointment.reference} on ${formatDate(appointment.date)} at ${formatTime(appointment.time)} has been cancelled.`,
   };
 }
 
 export async function availabilityAction(doctorId: string, date: string, duration = 30) {
   if (!doctorId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
-  return getAvailableSlots(doctorId, date, duration);
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("public_available_slots", {
+    p_doctor_id: doctorId,
+    p_date: date,
+    p_duration: duration,
+  });
+
+  if (error) return [];
+  return (data ?? []) as { time: string; available: boolean }[];
 }
 
 export type PublicAppointment = Appointment;

@@ -48,7 +48,7 @@ export default async function DentistPatientCard({
   const user = await requireRole("dentist");
   const { id } = await params;
   const flash = await searchParams;
-  const patient = getPatient(id);
+  const patient = await getPatient(id);
   if (!patient) notFound();
 
   await logAudit({
@@ -62,12 +62,12 @@ export default async function DentistPatientCard({
     details: `Viewed dental patient card for ${patient.patient_number}.`,
   });
 
-  const dentalVisits = getDentalVisits(patient.id);
-  const toothFindings = getToothFindings(patient.id);
-  const treatmentPlans = getTreatmentPlans(patient.id);
-  const upcoming = getUpcomingAppointmentsForPatient(patient.id).filter((appointment) => appointment.department === "dental");
-  const vitals = getLatestVitals(patient.id);
-  const activeVisit = getActiveVisit(patient.id, "dental");
+  const dentalVisits = await getDentalVisits(patient.id);
+  const toothFindings = await getToothFindings(patient.id);
+  const treatmentPlans = await getTreatmentPlans(patient.id);
+  const upcoming = (await getUpcomingAppointmentsForPatient(patient.id)).filter((appointment) => appointment.department === "dental");
+  const vitals = await getLatestVitals(patient.id);
+  const activeVisit = await getActiveVisit(patient.id, "dental");
   const activeDentalVisit = activeVisit ? dentalVisits.find((visit) => visit.visit_id === activeVisit.id) : undefined;
 
   const latestByTooth = new Map<string, ToothFinding>();

@@ -13,8 +13,8 @@ const sections = [
     id: "who-we-are",
     title: "1. Who we are",
     body: [
-      "Pioneer Family Dental and Optical Clinic is the data controller for the personal and health information described in this notice. Our clinic is located at Pioneer Plaza, 2nd Floor, Ngong Road, Nairobi, Kenya.",
-      "You can reach our privacy contact at privacy@pioneerclinic.co.ke or by calling +254 712 345 678 during clinic hours.",
+      "Pioneer Family Dental and Optical Clinic is the data controller for the personal and health information described in this notice. Our clinic is located at Buruburu Phase 1 along Outering Road Junction (opposite the bus terminus), Nairobi, Kenya.",
+      "You can reach our privacy contact at privacy@pioneerclinic.co.ke or by calling +254 705 188 578 during clinic hours.",
     ],
   },
   {
@@ -167,7 +167,7 @@ export default function PrivacyPage() {
               </p>
               <p className="flex items-start gap-2.5 text-navy-700">
                 <Phone className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" aria-hidden />
-                <a href="tel:+254712345678" className="font-semibold underline">+254 712 345 678</a>
+                <a href="tel:+254705188578" className="font-semibold underline">+254 705 188 578</a>
               </p>
             </div>
             <p className="mt-4 flex items-start gap-2.5 text-xs leading-5 text-navy-600">

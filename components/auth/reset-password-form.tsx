@@ -5,25 +5,11 @@ import { useActionState } from "react";
 import { AlertCircle, KeyRound, Loader2 } from "lucide-react";
 import { resetPasswordAction, type AuthState } from "@/lib/actions/auth";
 
-export function ResetPasswordForm({ token }: { token: string }) {
+export function ResetPasswordForm() {
   const [state, action, pending] = useActionState<AuthState, FormData>(resetPasswordAction, null);
-
-  if (!token) {
-    return (
-      <div className="space-y-4">
-        <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs leading-5 text-red-800">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-          This reset link is missing its token. Request a new link.
-        </div>
-        <Link href="/forgot-password" className="btn-primary w-full">Request a new link</Link>
-      </div>
-    );
-  }
 
   return (
     <form action={action} className="space-y-5">
-      <input type="hidden" name="token" value={token} />
-
       {state?.error && (
         <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs leading-5 text-red-800">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />

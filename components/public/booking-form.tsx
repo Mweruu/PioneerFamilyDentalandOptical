@@ -122,7 +122,7 @@ export function BookingForm({ doctors, services, initialDepartment = "dental", i
           <div className="mt-5 space-y-3 text-sm leading-6 text-navy-600">
             <p className="flex items-start gap-2.5">
               <Phone className="mt-0.5 h-4 w-4 shrink-0 text-teal-600" aria-hidden />
-              Need to change something? Call <a href="tel:+254712345678" className="font-semibold text-navy-900">+254 712 345 678</a>.
+              Need to change something? Call <a href="tel:+254705188578" className="font-semibold text-navy-900">+254 705 188 578</a>.
             </p>
             <p className="flex items-start gap-2.5">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-teal-600" aria-hidden />

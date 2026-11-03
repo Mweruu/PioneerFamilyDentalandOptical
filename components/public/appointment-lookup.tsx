@@ -114,7 +114,7 @@ export function AppointmentLookup() {
           </form>
         ) : (
           <p className="rounded-xl border border-line bg-mist p-4 text-xs leading-5 text-navy-500">
-            This appointment can no longer be cancelled online. Please call the clinic on <a href="tel:+254712345678" className="font-semibold text-navy-800">+254 712 345 678</a>.
+            This appointment can no longer be cancelled online. Please call the clinic on <a href="tel:+254705188578" className="font-semibold text-navy-800">+254 705 188 578</a>.
           </p>
         )}
       </div>

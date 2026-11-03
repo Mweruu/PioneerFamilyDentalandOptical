@@ -25,7 +25,7 @@ export default async function ReceptionAppointmentsPage({
     ? (params.status as AppointmentStatus)
     : undefined;
 
-  const appointments = getAppointments({
+  const appointments = await getAppointments({
     date: date || undefined,
     department,
     status,

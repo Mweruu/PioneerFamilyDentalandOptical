@@ -1,8 +1,7 @@
 import "server-only";
 import { headers } from "next/headers";
-import { db } from "./db";
+import { createClient } from "./supabase/server";
 import type { Role } from "./types";
-import { nowIso } from "./utils";
 
 type AuditInput = {
   actorId?: string | null;
@@ -13,35 +12,47 @@ type AuditInput = {
   entityId?: string | null;
   patientId?: string | null;
   details?: string | null;
+  /** Use the narrowly-scoped SECURITY DEFINER RPC for unauthenticated events. */
+  publicEvent?: boolean;
 };
 
-export async function logAudit(input: AuditInput) {
-  let ip: string | null = null;
+async function requestIp() {
   try {
     const h = await headers();
-    ip =
-      h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      h.get("x-real-ip") ||
-      null;
+    return h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || null;
   } catch {
-    // headers() is unavailable in some background contexts.
+    return null;
+  }
+}
+
+export async function logAudit(input: AuditInput) {
+  const ip = await requestIp();
+  const supabase = await createClient();
+
+  if (input.publicEvent) {
+    const { error } = await supabase.rpc("public_log_audit", {
+      p_action: input.action,
+      p_entity_type: input.entityType ?? null,
+      p_entity_id: input.entityId ?? null,
+      p_patient_id: input.patientId ?? null,
+      p_details: input.details ?? null,
+      p_ip: ip,
+    });
+    if (error) throw new Error(`Audit log failed: ${error.message}`);
+    return;
   }
 
-  db.prepare(`
-    INSERT INTO audit_logs
-      (id, actor_id, actor_name, actor_role, action, entity_type, entity_id, patient_id, details, ip, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    crypto.randomUUID(),
-    input.actorId ?? null,
-    input.actorName ?? null,
-    input.actorRole ?? null,
-    input.action,
-    input.entityType ?? null,
-    input.entityId ?? null,
-    input.patientId ?? null,
-    input.details ?? null,
+  const { error } = await supabase.from("audit_logs").insert({
+    actor_id: input.actorId ?? null,
+    actor_name: input.actorName ?? null,
+    actor_role: input.actorRole ?? null,
+    action: input.action,
+    entity_type: input.entityType ?? null,
+    entity_id: input.entityId ?? null,
+    patient_id: input.patientId ?? null,
+    details: input.details ?? null,
     ip,
-    nowIso(),
-  );
+  });
+
+  if (error) throw new Error(`Audit log failed: ${error.message}`);
 }

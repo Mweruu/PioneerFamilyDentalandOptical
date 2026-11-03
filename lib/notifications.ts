@@ -1,10 +1,10 @@
 import "server-only";
-import { db } from "./db";
+import { createClient } from "./supabase/server";
 import { formatDate, formatTime, nowIso } from "./utils";
 
-type NotificationTemplate = "booking_confirmation" | "reminder" | "cancellation" | "password_reset";
+type NotificationTemplate = "booking_confirmation" | "reminder" | "cancellation";
 
-type AppointmentNotification = {
+export type NotificationAppointment = {
   id: string;
   reference: string;
   full_name: string;
@@ -16,29 +16,57 @@ type AppointmentNotification = {
   doctor_name: string;
 };
 
-function setting(key: string) {
-  const row = db.prepare("SELECT value FROM clinic_settings WHERE key = ?").get(key) as
-    | { value: string }
-    | undefined;
-  return row?.value ?? null;
+type QueueOptions = {
+  /** Unauthenticated public booking/lookup/cancellation. */
+  publicEvent?: boolean;
+  /** Appointment details already returned by a public RPC. */
+  appointment?: NotificationAppointment;
+};
+
+async function setting(key: string, publicEvent: boolean) {
+  const supabase = await createClient();
+
+  if (publicEvent) {
+    const { data } = await supabase.rpc("public_clinic_info");
+    const info = (data ?? {}) as Record<string, string>;
+    return info[key] ?? null;
+  }
+
+  const { data } = await supabase
+    .from("clinic_settings")
+    .select("value")
+    .eq("key", key)
+    .maybeSingle();
+  return (data as { value: string } | null)?.value ?? null;
 }
 
-function messageFor(template: NotificationTemplate, appt: AppointmentNotification) {
-  const clinic = setting("clinic_name") || "Pioneer Family Dental and Optical Clinic";
-  const phone = setting("clinic_phone") || "";
+async function messageFor(
+  template: NotificationTemplate,
+  appt: NotificationAppointment,
+  publicEvent: boolean,
+) {
+  const [clinic, phone] = await Promise.all([
+    setting("clinic_name", publicEvent),
+    setting("clinic_phone", publicEvent),
+  ]);
+  const clinicName = clinic || "Pioneer Family Dental and Optical Clinic";
+  const clinicPhone = phone || "";
+
   if (template === "cancellation") {
-    return `${appt.full_name}, your appointment ${appt.reference} at ${clinic} on ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)} has been cancelled. Call ${phone} to rebook.`;
+    return `${appt.full_name}, your appointment ${appt.reference} at ${clinicName} on ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)} has been cancelled. Call ${clinicPhone} to rebook.`;
   }
   if (template === "reminder") {
-    return `Reminder: ${appt.full_name}, your ${appt.department} appointment at ${clinic} is on ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)} with ${appt.doctor_name}. Ref: ${appt.reference}. Call ${phone}.`;
+    return `Reminder: ${appt.full_name}, your ${appt.department} appointment at ${clinicName} is on ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)} with ${appt.doctor_name}. Ref: ${appt.reference}. Call ${clinicPhone}.`;
   }
-  return `${appt.full_name}, your ${appt.department} appointment at ${clinic} is confirmed for ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)} with ${appt.doctor_name}. Ref: ${appt.reference}. Call ${phone}.`;
+  return `${appt.full_name}, your ${appt.department} appointment at ${clinicName} is confirmed for ${formatDate(appt.appointment_date)} at ${formatTime(appt.appointment_time)} with ${appt.doctor_name}. Ref: ${appt.reference}. Call ${clinicPhone}.`;
 }
 
 async function deliverSms(recipient: string, message: string) {
   const apiKey = process.env.AFRICASTALKING_API_KEY;
   const username = process.env.AFRICASTALKING_USERNAME;
-  if (!apiKey || !username) return { status: "not_configured" as const, error: "Africa's Talking credentials are not configured." };
+  if (!apiKey || !username) {
+    return { status: "not_configured" as const, error: "Africa's Talking credentials are not configured." };
+  }
 
   const body = new URLSearchParams({
     username,
@@ -66,7 +94,9 @@ async function deliverSms(recipient: string, message: string) {
 async function deliverEmail(recipient: string, subject: string, message: string) {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.NOTIFICATION_FROM_EMAIL;
-  if (!apiKey || !from) return { status: "not_configured" as const, error: "Email provider credentials are not configured." };
+  if (!apiKey || !from) {
+    return { status: "not_configured" as const, error: "Email provider credentials are not configured." };
+  }
 
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -88,19 +118,52 @@ async function deliverEmail(recipient: string, subject: string, message: string)
   return { status: "sent" as const, error: null };
 }
 
-export async function queueAppointmentNotification(appointmentId: string, template: NotificationTemplate = "booking_confirmation") {
-  const appt = db
-    .prepare(`
-      SELECT a.id, a.reference, a.full_name, a.phone, a.email, a.department, a.appointment_date,
-             a.appointment_time, s.name AS doctor_name
-      FROM appointments a
-      JOIN staff s ON s.id = a.doctor_id
-      WHERE a.id = ?
-    `)
-    .get(appointmentId) as AppointmentNotification | undefined;
+async function loadAppointment(
+  appointmentId: string,
+  publicEvent: boolean,
+): Promise<NotificationAppointment | null> {
+  const supabase = await createClient();
+
+  if (publicEvent) {
+    const { data } = await supabase.rpc("public_appointment_notification", {
+      p_appointment_id: appointmentId,
+    });
+    return (data as NotificationAppointment | null) ?? null;
+  }
+
+  const { data } = await supabase
+    .from("appointments")
+    .select(
+      "id, reference, full_name, phone, email, department, appointment_date, appointment_time, staff!appointments_doctor_id_fkey(name)",
+    )
+    .eq("id", appointmentId)
+    .maybeSingle();
+
+  if (!data) return null;
+  const row = data as unknown as NotificationAppointment & { staff: { name: string } | null };
+  return {
+    id: row.id,
+    reference: row.reference,
+    full_name: row.full_name,
+    phone: row.phone,
+    email: row.email,
+    department: row.department,
+    appointment_date: row.appointment_date,
+    appointment_time: row.appointment_time.slice(0, 5),
+    doctor_name: row.staff?.name ?? "the clinic",
+  };
+}
+
+export async function queueAppointmentNotification(
+  appointmentId: string,
+  template: NotificationTemplate = "booking_confirmation",
+  options: QueueOptions = {},
+) {
+  const publicEvent = options.publicEvent ?? false;
+  const appt = options.appointment ?? (await loadAppointment(appointmentId, publicEvent));
   if (!appt) return;
 
-  const message = messageFor(template, appt);
+  const message = await messageFor(template, appt, publicEvent);
   const channel: "sms" | "email" = appt.email ? "email" : "sms";
   const recipient = channel === "email" ? appt.email! : appt.phone;
 
@@ -119,37 +182,34 @@ export async function queueAppointmentNotification(appointmentId: string, templa
     result = { status: "failed", error: error instanceof Error ? error.message : "Notification delivery failed." };
   }
 
-  db.prepare(`
-    INSERT INTO notifications (id, appointment_id, channel, recipient, template, status, payload, error, sent_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    crypto.randomUUID(),
-    appt.id,
+  const supabase = await createClient();
+  const sentAt = result.status === "sent" ? nowIso() : null;
+
+  if (publicEvent) {
+    const { error } = await supabase.rpc("public_record_notification", {
+      p_appointment_id: appt.id,
+      p_reference: appt.reference,
+      p_channel: channel,
+      p_recipient: recipient,
+      p_template: template,
+      p_status: result.status,
+      p_payload: message,
+      p_error: result.error,
+      p_sent_at: sentAt,
+    });
+    if (error) throw new Error(`Notification log failed: ${error.message}`);
+    return;
+  }
+
+  const { error } = await supabase.from("notifications").insert({
+    appointment_id: appt.id,
     channel,
     recipient,
     template,
-    result.status,
-    message,
-    result.error,
-    result.status === "sent" ? nowIso() : null,
-    nowIso(),
-  );
-}
-
-export async function queuePasswordResetNotification(recipient: string, name: string, resetUrl: string) {
-  const message = `Hello ${name}, a password reset was requested for your Pioneer Clinic staff account. Use this link within 30 minutes: ${resetUrl}. If you did not request this, contact the clinic administrator.`;
-  const result = await deliverEmail(recipient, "Pioneer Clinic password reset", message);
-  db.prepare(`
-    INSERT INTO notifications (id, appointment_id, channel, recipient, template, status, payload, error, sent_at, created_at)
-    VALUES (?, NULL, 'email', ?, 'password_reset', ?, ?, ?, ?, ?)
-  `).run(
-    crypto.randomUUID(),
-    recipient,
-    result.status,
-    message,
-    result.error,
-    result.status === "sent" ? nowIso() : null,
-    nowIso(),
-  );
-  return result;
+    status: result.status,
+    payload: message,
+    error: result.error,
+    sent_at: sentAt,
+  });
+  if (error) throw new Error(`Notification log failed: ${error.message}`);
 }

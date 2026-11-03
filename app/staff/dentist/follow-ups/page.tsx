@@ -39,7 +39,7 @@ export default async function DentistFollowUpsPage({
   const user = await requireRole("dentist");
   const params = await searchParams;
   const query = params.q?.trim().toLowerCase() ?? "";
-  const all = (getFollowUpsDue("dental") as FollowUp[]).filter((plan) => plan.created_by === user.id);
+  const all = ((await getFollowUpsDue("dental")) as FollowUp[]).filter((plan) => plan.created_by === user.id);
   const followUps = query
     ? all.filter((plan) =>
         [plan.full_name, plan.patient_number, plan.phone, plan.procedure, plan.diagnosis]

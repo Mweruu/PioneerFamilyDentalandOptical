@@ -21,8 +21,8 @@ export default async function AdminSchedulesPage({
 }) {
   await requireRole("admin");
   const params = await searchParams;
-  const schedules = getSchedules();
-  const doctors = getDoctors();
+  const schedules = await getSchedules();
+  const doctors = await getDoctors();
   const grouped = doctors.map((doctor) => ({
     doctor,
     schedules: schedules.filter((schedule) => schedule.doctor_id === doctor.id),

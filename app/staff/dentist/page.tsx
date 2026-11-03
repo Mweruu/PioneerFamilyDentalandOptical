@@ -54,12 +54,12 @@ export default async function DentistDashboard({
   const user = await requireRole("dentist");
   const params = await searchParams;
   const today = clinicToday();
-  const appointments = getAppointments({ doctorId: user.id, date: today, department: "dental" });
-  const counts = getDashboardCounts(today, { doctorId: user.id, department: "dental" });
-  const waiting = getWaitingPatients("dental", user.id);
-  const inConsultation = getInConsultation("dental", user.id);
-  const followUps = (getFollowUpsDue("dental") as FollowUp[]).filter((plan) => plan.created_by === user.id);
-  const recentPatients = getRecentPatients(user.id, "dental", 5);
+  const appointments = await getAppointments({ doctorId: user.id, date: today, department: "dental" });
+  const counts = await getDashboardCounts(today, { doctorId: user.id, department: "dental" });
+  const waiting = await getWaitingPatients("dental", user.id);
+  const inConsultation = await getInConsultation("dental", user.id);
+  const followUps = ((await getFollowUpsDue("dental")) as FollowUp[]).filter((plan) => plan.created_by === user.id);
+  const recentPatients = await getRecentPatients(user.id, "dental", 5);
   const nextAppointments = appointments.filter((appointment) =>
     ["Booked", "Confirmed", "Checked In", "Waiting for Doctor"].includes(appointment.status),
   );

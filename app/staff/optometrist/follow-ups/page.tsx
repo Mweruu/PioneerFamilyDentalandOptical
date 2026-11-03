@@ -34,7 +34,7 @@ export default async function OptometristFollowUpsPage({
   const user = await requireRole("eye_doctor");
   const params = await searchParams;
   const query = params.q?.trim().toLowerCase() ?? "";
-  const all = (getFollowUpsDue("optical") as OpticalFollowUp[]).filter((visit) => visit.doctor_id === user.id);
+  const all = ((await getFollowUpsDue("optical")) as unknown as OpticalFollowUp[]).filter((visit) => visit.doctor_id === user.id);
   const followUps = query
     ? all.filter((visit) =>
         [visit.full_name, visit.patient_number, visit.phone, visit.diagnosis, visit.management_plan]

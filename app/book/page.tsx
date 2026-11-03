@@ -16,8 +16,8 @@ export const metadata = {
 export default async function BookPage({ searchParams }: { searchParams: Promise<{ department?: string; service?: string }> }) {
   const params = await searchParams;
   const initialDepartment: Department = params.department === "optical" ? "optical" : "dental";
-  const doctors = getDoctors();
-  const services = getServices();
+  const doctors = await getDoctors();
+  const services = await getServices();
 
   return (
     <PublicShell>
@@ -68,11 +68,11 @@ export default async function BookPage({ searchParams }: { searchParams: Promise
           <div className="rounded-2xl bg-navy-950 p-5 text-white">
             <h2 className="text-sm font-semibold">Need help booking?</h2>
             <p className="mt-2 text-xs leading-5 text-navy-300">Call the front desk and we will find a suitable time for you.</p>
-            <a href="tel:+254712345678" className="btn-teal mt-4 w-full">
+            <a href="tel:+254705188578" className="btn-teal mt-4 w-full">
               <Phone className="h-4 w-4" aria-hidden />
-              +254 712 345 678
+              +254 705 188 578
             </a>
-            <p className="mt-3 text-center text-[10px] text-navy-400">Mon–Fri 8am–5pm · Sat 8am–2pm</p>
+            <p className="mt-3 text-center text-[10px] text-navy-400">Mon–Fri 8am–8pm · Sat 8am–6pm</p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">

@@ -31,15 +31,15 @@ export default async function DentistAppointmentDetail({
   const user = await requireRole("dentist");
   const { id } = await params;
   const flash = await searchParams;
-  const appointment = getAppointment(id);
+  const appointment = await getAppointment(id);
   if (!appointment) notFound();
   if (appointment.department !== "dental" || appointment.doctor_id !== user.id) {
     redirect(`/staff/dentist/appointments?error=${encodeURIComponent("That appointment is not assigned to you.")}`);
   }
 
-  const patient = appointment.patient_id ? getPatient(appointment.patient_id) : undefined;
-  const dentalVisit = getDentalVisitForAppointment(appointment.id);
-  const vitals = patient ? getLatestVitals(patient.id) : undefined;
+  const patient = appointment.patient_id ? await getPatient(appointment.patient_id) : undefined;
+  const dentalVisit = await getDentalVisitForAppointment(appointment.id);
+  const vitals = patient ? await getLatestVitals(patient.id) : undefined;
   const active = !["Completed", "Cancelled", "No Show"].includes(appointment.status);
 
   return (

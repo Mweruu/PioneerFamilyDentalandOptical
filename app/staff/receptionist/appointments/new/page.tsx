@@ -21,14 +21,14 @@ export default async function NewReceptionAppointmentPage({
 }) {
   await requireRole("receptionist");
   const params = await searchParams;
-  const patient = params.patientId ? getPatient(params.patientId) : undefined;
-  const doctors = getDoctors();
-  const services = getServices();
+  const patient = params.patientId ? await getPatient(params.patientId) : undefined;
+  const doctors = await getDoctors();
+  const services = await getServices();
   const today = clinicToday();
 
   if (!patient) {
     const query = params.q?.trim();
-    const patients = query ? searchPatients(query) : listPatients(12);
+    const patients = query ? await searchPatients(query) : await listPatients(12);
     return (
       <div>
         <PageHeader

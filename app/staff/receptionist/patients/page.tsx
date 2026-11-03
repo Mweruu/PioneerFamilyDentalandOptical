@@ -19,7 +19,7 @@ export default async function ReceptionPatientsPage({
   await requireRole("receptionist");
   const params = await searchParams;
   const query = params.q?.trim() ?? "";
-  const patients = query ? searchPatients(query) : listPatients(100);
+  const patients = query ? await searchPatients(query) : await listPatients(100);
 
   return (
     <div>

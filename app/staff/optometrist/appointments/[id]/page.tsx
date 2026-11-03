@@ -31,15 +31,15 @@ export default async function OptometristAppointmentDetail({
   const user = await requireRole("eye_doctor");
   const { id } = await params;
   const flash = await searchParams;
-  const appointment = getAppointment(id);
+  const appointment = await getAppointment(id);
   if (!appointment) notFound();
   if (appointment.department !== "optical" || appointment.doctor_id !== user.id) {
     redirect(`/staff/optometrist/appointments?error=${encodeURIComponent("That appointment is not assigned to you.")}`);
   }
 
-  const patient = appointment.patient_id ? getPatient(appointment.patient_id) : undefined;
-  const opticalVisit = getOpticalVisitForAppointment(appointment.id);
-  const vitals = patient ? getLatestVitals(patient.id) : undefined;
+  const patient = appointment.patient_id ? await getPatient(appointment.patient_id) : undefined;
+  const opticalVisit = await getOpticalVisitForAppointment(appointment.id);
+  const vitals = patient ? await getLatestVitals(patient.id) : undefined;
   const active = !["Completed", "Cancelled", "No Show"].includes(appointment.status);
 
   return (

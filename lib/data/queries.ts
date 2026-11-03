@@ -1,5 +1,5 @@
 import "server-only";
-import { db } from "../db";
+import { createClient } from "../supabase/server";
 import type {
   Appointment,
   AppointmentStatus,
@@ -18,88 +18,358 @@ import type {
 } from "../types";
 import { addMinutesToTime, clinicToday, minutesFromTime, timeSlots, weekdayNumber } from "../utils";
 
-const appointmentSelect = `
-  SELECT a.*, s.name AS doctor_name, sv.name AS service_name, p.patient_number
-  FROM appointments a
-  JOIN staff s ON s.id = a.doctor_id
-  LEFT JOIN services sv ON sv.id = a.service_id
-  LEFT JOIN patients p ON p.id = a.patient_id
-`;
+type Row = Record<string, any>;
 
-export function getDoctors(department?: Department) {
-  const role = department === "dental" ? "dentist" : department === "optical" ? "eye_doctor" : null;
-  return db
-    .prepare(
-      `SELECT id, name, email, role, title, active, created_at FROM staff
-       WHERE active = 1 ${role ? "AND role = ?" : "AND role IN ('dentist','eye_doctor')"}
-       ORDER BY name`,
-    )
-    .all(...(role ? [role] : [])) as StaffUser[];
+const appointmentSelect =
+  "*, staff!appointments_doctor_id_fkey(name), services!appointments_service_id_fkey(name), patients!appointments_patient_id_fkey(patient_number)";
+
+function fail(error: { message: string } | null) {
+  if (error) throw new Error(error.message);
 }
 
-export function getServices(department?: Department, activeOnly = true) {
-  return db
-    .prepare(
-      `SELECT * FROM services
-       WHERE 1 = 1 ${department ? "AND department = ?" : ""} ${activeOnly ? "AND active = 1" : ""}
-       ORDER BY department, name`,
-    )
-    .all(...(department ? [department] : [])) as Service[];
+function boolInt(value: unknown) {
+  return value ? 1 : 0;
 }
 
-export function getPatient(id: string) {
-  return db.prepare("SELECT * FROM patients WHERE id = ?").get(id) as Patient | undefined;
+function shortTime(value: unknown) {
+  return typeof value === "string" ? value.slice(0, 5) : null;
 }
 
-export function getPatientByNumber(patientNumber: string) {
-  return db.prepare("SELECT * FROM patients WHERE patient_number = ?").get(patientNumber) as Patient | undefined;
+function jsonText(value: unknown) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
 }
 
-export function searchPatients(query: string) {
-  const term = `%${query.trim()}%`;
-  return db
-    .prepare(`
-      SELECT * FROM patients
-      WHERE full_name LIKE ? OR phone LIKE ? OR patient_number LIKE ?
-      ORDER BY full_name
-      LIMIT 40
-    `)
-    .all(term, term, term) as Patient[];
+function mapStaff(row: Row): StaffUser {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email ?? "",
+    role: row.role,
+    title: row.title ?? null,
+    active: boolInt(row.active),
+    created_at: row.created_at,
+  };
 }
 
-export function listPatients(limit = 50) {
-  return db.prepare("SELECT * FROM patients ORDER BY created_at DESC LIMIT ?").all(limit) as Patient[];
+function mapService(row: Row): Service {
+  return {
+    id: row.id,
+    department: row.department,
+    name: row.name,
+    description: row.description ?? null,
+    duration_minutes: row.duration_minutes,
+    price: row.price === null || row.price === undefined ? null : Number(row.price),
+    active: boolInt(row.active),
+  };
 }
 
-export function listPatientsForDepartment(department: Department, query = "", limit = 100) {
-  const term = `%${query.trim()}%`;
-  return db
-    .prepare(`
-      SELECT DISTINCT p.* FROM patients p
-      WHERE (
-        EXISTS (SELECT 1 FROM appointments a WHERE a.patient_id = p.id AND a.department = ?)
-        OR EXISTS (SELECT 1 FROM visits v WHERE v.patient_id = p.id AND v.department = ?)
-      )
-      ${query.trim() ? "AND (p.full_name LIKE ? OR p.phone LIKE ? OR p.patient_number LIKE ?)" : ""}
-      ORDER BY p.full_name
-      LIMIT ?
-    `)
-    .all(
-      ...(query.trim() ? [department, department, term, term, term, limit] : [department, department, limit]),
-    ) as Patient[];
+function mapAppointment(row: Row): Appointment {
+  return {
+    id: row.id,
+    reference: row.reference,
+    patient_id: row.patient_id ?? null,
+    patient_number: row.patients?.patient_number ?? null,
+    full_name: row.full_name,
+    phone: row.phone,
+    email: row.email ?? null,
+    date_of_birth: row.date_of_birth ?? null,
+    gender: row.gender ?? null,
+    department: row.department,
+    doctor_id: row.doctor_id,
+    doctor_name: row.staff?.name ?? "Unknown clinician",
+    service_id: row.service_id ?? null,
+    service_name: row.services?.name ?? null,
+    appointment_date: row.appointment_date,
+    appointment_time: shortTime(row.appointment_time) ?? "",
+    duration_minutes: row.duration_minutes,
+    reason: row.reason,
+    patient_type: row.patient_type,
+    notes: row.notes ?? null,
+    status: row.status,
+    source: row.source,
+    checked_in_at: row.checked_in_at ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
 }
 
-export function getPatientByExactIdentity(fullName: string, phone: string, dob: string | null) {
-  const rows = db
-    .prepare(`
-      SELECT * FROM patients
-      WHERE lower(full_name) = lower(?) AND phone = ? ${dob ? "AND date_of_birth = ?" : ""}
-    `)
-    .all(...(dob ? [fullName, phone, dob] : [fullName, phone])) as Patient[];
-  return rows;
+function mapVisit(row: Row): Visit & { doctor_name: string | null } {
+  return {
+    id: row.id,
+    patient_id: row.patient_id,
+    appointment_id: row.appointment_id ?? null,
+    department: row.department,
+    doctor_id: row.doctor_id ?? null,
+    status: row.status,
+    started_at: row.started_at ?? null,
+    completed_at: row.completed_at ?? null,
+    created_at: row.created_at,
+    doctor_name: row.staff?.name ?? null,
+  };
 }
 
-export function getAppointments(filters: {
+function mapVitals(row: Row): Vitals {
+  return {
+    id: row.id,
+    patient_id: row.patient_id,
+    visit_id: row.visit_id ?? null,
+    bp_systolic: row.bp_systolic ?? null,
+    bp_diastolic: row.bp_diastolic ?? null,
+    pulse: row.pulse ?? null,
+    temperature_c: row.temperature_c === null || row.temperature_c === undefined ? null : Number(row.temperature_c),
+    respiratory_rate: row.respiratory_rate ?? null,
+    spo2: row.spo2 ?? null,
+    weight_kg: row.weight_kg === null || row.weight_kg === undefined ? null : Number(row.weight_kg),
+    height_cm: row.height_cm === null || row.height_cm === undefined ? null : Number(row.height_cm),
+    bmi: row.bmi === null || row.bmi === undefined ? null : Number(row.bmi),
+    observations: row.observations ?? null,
+    recorded_by: row.recorded_by,
+    recorded_by_name: row.staff?.name ?? null,
+    recorded_at: row.recorded_at,
+  };
+}
+
+function mapDentalVisit(row: Row): DentalVisit {
+  return {
+    id: row.id,
+    patient_id: row.patient_id,
+    visit_id: row.visit_id ?? null,
+    doctor_id: row.doctor_id,
+    doctor_name: row.staff?.name ?? null,
+    visit_date: row.visit_date,
+    presenting_complaint: row.presenting_complaint ?? null,
+    history: row.history ?? null,
+    examination_findings: row.examination_findings ?? null,
+    diagnosis: row.diagnosis ?? null,
+    treatment_performed: row.treatment_performed ?? null,
+    medications: row.medications ?? null,
+    advice: row.advice ?? null,
+    follow_up: row.follow_up ?? null,
+    notes: row.notes ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function mapToothFinding(row: Row): ToothFinding {
+  return {
+    id: row.id,
+    patient_id: row.patient_id,
+    dental_visit_id: row.dental_visit_id,
+    tooth_number: row.tooth_number,
+    dentition: row.dentition,
+    condition: row.condition,
+    surfaces: jsonText(row.surfaces),
+    diagnosis: row.diagnosis ?? null,
+    planned_treatment: row.planned_treatment ?? null,
+    treatment_performed: row.treatment_performed ?? null,
+    treatment_date: row.treatment_date ?? null,
+    notes: row.notes ?? null,
+    status: row.status,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function mapTreatmentPlan(row: Row): TreatmentPlan {
+  return {
+    id: row.id,
+    patient_id: row.patient_id,
+    dental_visit_id: row.dental_visit_id ?? null,
+    tooth_numbers: row.tooth_numbers,
+    diagnosis: row.diagnosis,
+    procedure: row.procedure,
+    priority: row.priority,
+    estimated_cost: row.estimated_cost === null || row.estimated_cost === undefined ? null : Number(row.estimated_cost),
+    status: row.status,
+    notes: row.notes ?? null,
+    next_review_date: row.next_review_date ?? null,
+    created_by: row.created_by,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function mapOpticalVisit(row: Row): OpticalVisit {
+  return {
+    id: row.id,
+    patient_id: row.patient_id,
+    visit_id: row.visit_id ?? null,
+    doctor_id: row.doctor_id,
+    doctor_name: row.staff?.name ?? null,
+    visit_date: row.visit_date,
+    presenting_complaint: row.presenting_complaint ?? null,
+    symptoms: jsonText(row.symptoms),
+    unaided_va_od: row.unaided_va_od ?? null,
+    unaided_va_os: row.unaided_va_os ?? null,
+    pinhole_va_od: row.pinhole_va_od ?? null,
+    pinhole_va_os: row.pinhole_va_os ?? null,
+    corrected_va_od: row.corrected_va_od ?? null,
+    corrected_va_os: row.corrected_va_os ?? null,
+    external_examination: row.external_examination ?? null,
+    anterior_segment: row.anterior_segment ?? null,
+    posterior_segment: row.posterior_segment ?? null,
+    iop_od: row.iop_od ?? null,
+    iop_os: row.iop_os ?? null,
+    colour_vision: row.colour_vision ?? null,
+    diagnosis: row.diagnosis ?? null,
+    management_plan: row.management_plan ?? null,
+    referral: row.referral ?? null,
+    follow_up_date: row.follow_up_date ?? null,
+    notes: row.notes ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function mapPrescription(row: Row): OpticalPrescription {
+  return {
+    id: row.id,
+    patient_id: row.patient_id,
+    optical_visit_id: row.optical_visit_id ?? null,
+    doctor_id: row.doctor_id,
+    doctor_name: row.staff?.name ?? null,
+    od_sph: row.od_sph ?? null,
+    od_cyl: row.od_cyl ?? null,
+    od_axis: row.od_axis ?? null,
+    od_add: row.od_add ?? null,
+    od_prism: row.od_prism ?? null,
+    od_base: row.od_base ?? null,
+    os_sph: row.os_sph ?? null,
+    os_cyl: row.os_cyl ?? null,
+    os_axis: row.os_axis ?? null,
+    os_add: row.os_add ?? null,
+    os_prism: row.os_prism ?? null,
+    os_base: row.os_base ?? null,
+    pd: row.pd ?? null,
+    pd_od: row.pd_od ?? null,
+    pd_os: row.pd_os ?? null,
+    lens_type: row.lens_type ?? null,
+    lens_recommendation: row.lens_recommendation ?? null,
+    frame_recommendation: row.frame_recommendation ?? null,
+    notes: row.notes ?? null,
+    prescribed_at: row.prescribed_at,
+    created_at: row.created_at,
+  };
+}
+
+function mapNotification(row: Row) {
+  return {
+    id: row.id,
+    appointment_id: row.appointment_id ?? null,
+    channel: row.channel,
+    recipient: row.recipient,
+    template: row.template,
+    status: row.status,
+    payload: jsonText(row.payload),
+    error: row.error ?? null,
+    sent_at: row.sent_at ?? null,
+    created_at: row.created_at,
+  };
+}
+
+function searchTerm(value: string) {
+  return value.trim().replace(/[%,()]/g, "");
+}
+
+export async function getDoctors(department?: Department) {
+  const supabase = await createClient();
+  let query = supabase
+    .from("public_staff")
+    .select("id, name, role, title, active, created_at")
+    .eq("active", true);
+
+  if (department) {
+    query = query.eq("role", department === "dental" ? "dentist" : "eye_doctor");
+  } else {
+    query = query.in("role", ["dentist", "eye_doctor"]);
+  }
+
+  const { data, error } = await query.order("name");
+  fail(error);
+  return (data ?? []).map(mapStaff);
+}
+
+export async function getServices(department?: Department, activeOnly = true) {
+  const supabase = await createClient();
+  let query = supabase.from("services").select("*");
+  if (department) query = query.eq("department", department);
+  if (activeOnly) query = query.eq("active", true);
+
+  const { data, error } = await query.order("department").order("name");
+  fail(error);
+  return (data ?? []).map(mapService);
+}
+
+export async function getPatient(id: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("patients").select("*").eq("id", id).maybeSingle();
+  fail(error);
+  return (data as Patient | null) ?? undefined;
+}
+
+export async function getPatientByNumber(patientNumber: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("patients")
+    .select("*")
+    .eq("patient_number", patientNumber)
+    .maybeSingle();
+  fail(error);
+  return (data as Patient | null) ?? undefined;
+}
+
+export async function searchPatients(query: string) {
+  const supabase = await createClient();
+  const term = searchTerm(query);
+  const { data, error } = await supabase
+    .from("patients")
+    .select("*")
+    .or(`full_name.ilike.%${term}%,phone.ilike.%${term}%,patient_number.ilike.%${term}%`)
+    .order("full_name")
+    .limit(40);
+  fail(error);
+  return (data ?? []) as Patient[];
+}
+
+export async function listPatients(limit = 50) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("patients")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  fail(error);
+  return (data ?? []) as Patient[];
+}
+
+export async function listPatientsForDepartment(department: Department, query = "", limit = 100) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("list_department_patients", {
+    p_department: department,
+    p_query: query.trim(),
+    p_limit: limit,
+  });
+  fail(error);
+  return (data ?? []) as Patient[];
+}
+
+export async function getPatientByExactIdentity(fullName: string, phone: string, dob: string | null) {
+  const supabase = await createClient();
+  let query = supabase
+    .from("patients")
+    .select("*")
+    .ilike("full_name", fullName.trim())
+    .eq("phone", phone);
+  if (dob) query = query.eq("date_of_birth", dob);
+  const { data, error } = await query;
+  fail(error);
+  return (data ?? []) as Patient[];
+}
+
+export async function getAppointments(filters: {
   date?: string;
   fromDate?: string;
   department?: Department;
@@ -108,156 +378,189 @@ export function getAppointments(filters: {
   query?: string;
   limit?: number;
 }) {
-  const clauses: string[] = [];
-  const params: unknown[] = [];
-  if (filters.date) {
-    clauses.push("a.appointment_date = ?");
-    params.push(filters.date);
-  }
-  if (filters.fromDate) {
-    clauses.push("a.appointment_date >= ?");
-    params.push(filters.fromDate);
-  }
-  if (filters.department) {
-    clauses.push("a.department = ?");
-    params.push(filters.department);
-  }
-  if (filters.doctorId) {
-    clauses.push("a.doctor_id = ?");
-    params.push(filters.doctorId);
-  }
-  if (filters.status) {
-    clauses.push("a.status = ?");
-    params.push(filters.status);
-  }
+  const supabase = await createClient();
+  let query = supabase.from("appointments").select(appointmentSelect);
+
+  if (filters.date) query = query.eq("appointment_date", filters.date);
+  if (filters.fromDate) query = query.gte("appointment_date", filters.fromDate);
+  if (filters.department) query = query.eq("department", filters.department);
+  if (filters.doctorId) query = query.eq("doctor_id", filters.doctorId);
+  if (filters.status) query = query.eq("status", filters.status);
   if (filters.query) {
-    clauses.push("(a.full_name LIKE ? OR a.phone LIKE ? OR a.reference LIKE ?)");
-    const term = `%${filters.query}%`;
-    params.push(term, term, term);
+    const term = searchTerm(filters.query);
+    query = query.or(`full_name.ilike.%${term}%,phone.ilike.%${term}%,reference.ilike.%${term}%`);
   }
-  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const limit = filters.limit ?? 200;
-  return db
-    .prepare(`${appointmentSelect} ${where} ORDER BY a.appointment_date ASC, a.appointment_time ASC LIMIT ?`)
-    .all(...params, limit) as Appointment[];
+
+  const { data, error } = await query
+    .order("appointment_date", { ascending: true })
+    .order("appointment_time", { ascending: true })
+    .limit(filters.limit ?? 200);
+  fail(error);
+  return (data ?? []).map(mapAppointment);
 }
 
-export function getAppointment(id: string) {
-  return db.prepare(`${appointmentSelect} WHERE a.id = ?`).get(id) as Appointment | undefined;
+export async function getAppointment(id: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("appointments")
+    .select(appointmentSelect)
+    .eq("id", id)
+    .maybeSingle();
+  fail(error);
+  return data ? mapAppointment(data) : undefined;
 }
 
-export function getAppointmentsForPatient(patientId: string) {
-  return db
-    .prepare(`${appointmentSelect} WHERE a.patient_id = ? ORDER BY a.appointment_date DESC, a.appointment_time DESC`)
-    .all(patientId) as Appointment[];
+export async function getAppointmentsForPatient(patientId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("appointments")
+    .select(appointmentSelect)
+    .eq("patient_id", patientId)
+    .order("appointment_date", { ascending: false })
+    .order("appointment_time", { ascending: false });
+  fail(error);
+  return (data ?? []).map(mapAppointment);
 }
 
-export function getUpcomingAppointmentsForPatient(patientId: string) {
-  return db
-    .prepare(`
-      ${appointmentSelect}
-      WHERE a.patient_id = ? AND a.appointment_date >= ? AND a.status NOT IN ('Cancelled','No Show','Completed')
-      ORDER BY a.appointment_date ASC, a.appointment_time ASC
-    `)
-    .all(patientId, clinicToday()) as Appointment[];
+export async function getUpcomingAppointmentsForPatient(patientId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("appointments")
+    .select(appointmentSelect)
+    .eq("patient_id", patientId)
+    .gte("appointment_date", clinicToday())
+    .not("status", "in", "(Cancelled,No Show,Completed)")
+    .order("appointment_date", { ascending: true })
+    .order("appointment_time", { ascending: true });
+  fail(error);
+  return (data ?? []).map(mapAppointment);
 }
 
-export function getDentalVisit(id: string) {
-  return db
-    .prepare(`
-      SELECT dv.*, s.name AS doctor_name
-      FROM dental_visits dv LEFT JOIN staff s ON s.id = dv.doctor_id
-      WHERE dv.id = ?
-    `)
-    .get(id) as DentalVisit | undefined;
+export async function getDentalVisit(id: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("dental_visits")
+    .select("*, staff!dental_visits_doctor_id_fkey(name)")
+    .eq("id", id)
+    .maybeSingle();
+  fail(error);
+  return data ? mapDentalVisit(data) : undefined;
 }
 
-export function getDentalVisitForAppointment(appointmentId: string) {
-  return db
-    .prepare(`
-      SELECT dv.*, s.name AS doctor_name
-      FROM dental_visits dv
-      JOIN visits v ON v.id = dv.visit_id
-      LEFT JOIN staff s ON s.id = dv.doctor_id
-      WHERE v.appointment_id = ?
-      ORDER BY dv.created_at DESC LIMIT 1
-    `)
-    .get(appointmentId) as DentalVisit | undefined;
+export async function getDentalVisitForAppointment(appointmentId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("dental_visits")
+    .select("*, staff!dental_visits_doctor_id_fkey(name), visits!inner(appointment_id)")
+    .eq("visits.appointment_id", appointmentId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  fail(error);
+  return data ? mapDentalVisit(data) : undefined;
 }
 
-export function getOpticalVisit(id: string) {
-  return db
-    .prepare(`
-      SELECT ov.*, s.name AS doctor_name
-      FROM optical_visits ov LEFT JOIN staff s ON s.id = ov.doctor_id
-      WHERE ov.id = ?
-    `)
-    .get(id) as OpticalVisit | undefined;
+export async function getOpticalVisit(id: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("optical_visits")
+    .select("*, staff!optical_visits_doctor_id_fkey(name)")
+    .eq("id", id)
+    .maybeSingle();
+  fail(error);
+  return data ? mapOpticalVisit(data) : undefined;
 }
 
-export function getOpticalVisitForAppointment(appointmentId: string) {
-  return db
-    .prepare(`
-      SELECT ov.*, s.name AS doctor_name
-      FROM optical_visits ov
-      JOIN visits v ON v.id = ov.visit_id
-      LEFT JOIN staff s ON s.id = ov.doctor_id
-      WHERE v.appointment_id = ?
-      ORDER BY ov.created_at DESC LIMIT 1
-    `)
-    .get(appointmentId) as OpticalVisit | undefined;
+export async function getOpticalVisitForAppointment(appointmentId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("optical_visits")
+    .select("*, staff!optical_visits_doctor_id_fkey(name), visits!inner(appointment_id)")
+    .eq("visits.appointment_id", appointmentId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  fail(error);
+  return data ? mapOpticalVisit(data) : undefined;
 }
 
-export function getTreatmentPlan(id: string) {
-  return db.prepare("SELECT * FROM treatment_plans WHERE id = ?").get(id) as TreatmentPlan | undefined;
+export async function getTreatmentPlan(id: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("treatment_plans").select("*").eq("id", id).maybeSingle();
+  fail(error);
+  return data ? mapTreatmentPlan(data) : undefined;
 }
 
-export function getToothFinding(id: string) {
-  return db.prepare("SELECT * FROM tooth_findings WHERE id = ?").get(id) as ToothFinding | undefined;
+export async function getToothFinding(id: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("tooth_findings").select("*").eq("id", id).maybeSingle();
+  fail(error);
+  return data ? mapToothFinding(data) : undefined;
 }
 
-export function getOpticalPrescription(id: string) {
-  return db
-    .prepare(`
-      SELECT op.*, s.name AS doctor_name
-      FROM optical_prescriptions op LEFT JOIN staff s ON s.id = op.doctor_id
-      WHERE op.id = ?
-    `)
-    .get(id) as OpticalPrescription | undefined;
+export async function getOpticalPrescription(id: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("optical_prescriptions")
+    .select("*, staff!optical_prescriptions_doctor_id_fkey(name)")
+    .eq("id", id)
+    .maybeSingle();
+  fail(error);
+  return data ? mapPrescription(data) : undefined;
 }
 
-export function getPatientAppointmentCount(patientId: string) {
-  const row = db
-    .prepare("SELECT COUNT(*) AS count, MAX(appointment_date) AS last_date FROM appointments WHERE patient_id = ?")
-    .get(patientId) as { count: number; last_date: string | null };
-  return row;
+export async function getPatientAppointmentCount(patientId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("appointments")
+    .select("appointment_date")
+    .eq("patient_id", patientId);
+  fail(error);
+  const rows = (data ?? []) as { appointment_date: string }[];
+  return {
+    count: rows.length,
+    last_date: rows.reduce<string | null>(
+      (latest, row) => (!latest || row.appointment_date > latest ? row.appointment_date : latest),
+      null,
+    ),
+  };
 }
 
-export function getAppointmentByReference(reference: string) {
-  return db.prepare(`${appointmentSelect} WHERE a.reference = ?`).get(reference) as Appointment | undefined;
+export async function getAppointmentByReference(reference: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("appointments")
+    .select(appointmentSelect)
+    .eq("reference", reference)
+    .maybeSingle();
+  fail(error);
+  return data ? mapAppointment(data) : undefined;
 }
 
-export function getTodayAppointments(options: { doctorId?: string; department?: Department } = {}) {
+export async function getTodayAppointments(options: { doctorId?: string; department?: Department } = {}) {
   return getAppointments({ date: clinicToday(), ...options });
 }
 
-export function getDashboardCounts(date: string, options: { doctorId?: string; department?: Department } = {}) {
-  const params: unknown[] = [date];
-  let extra = "";
-  if (options.doctorId) {
-    extra += " AND doctor_id = ?";
-    params.push(options.doctorId);
-  }
-  if (options.department) {
-    extra += " AND department = ?";
-    params.push(options.department);
-  }
-  const rows = db
-    .prepare(`SELECT status, COUNT(*) AS count FROM appointments WHERE appointment_date = ? ${extra} GROUP BY status`)
-    .all(...params) as { status: AppointmentStatus; count: number }[];
-  const byStatus = Object.fromEntries(rows.map((r) => [r.status, r.count])) as Record<string, number>;
+export async function getDashboardCounts(
+  date: string,
+  options: { doctorId?: string; department?: Department } = {},
+) {
+  const supabase = await createClient();
+  let query = supabase.from("appointments").select("status").eq("appointment_date", date);
+  if (options.doctorId) query = query.eq("doctor_id", options.doctorId);
+  if (options.department) query = query.eq("department", options.department);
+
+  const { data, error } = await query;
+  fail(error);
+
+  const rows = (data ?? []) as { status: AppointmentStatus }[];
+  const byStatus = rows.reduce<Record<string, number>>((acc, row) => {
+    acc[row.status] = (acc[row.status] ?? 0) + 1;
+    return acc;
+  }, {});
+
   return {
-    total: rows.reduce((sum, r) => sum + r.count, 0),
+    total: rows.length,
     booked: byStatus.Booked ?? 0,
     confirmed: byStatus.Confirmed ?? 0,
     checkedIn: byStatus["Checked In"] ?? 0,
@@ -270,186 +573,233 @@ export function getDashboardCounts(date: string, options: { doctorId?: string; d
   };
 }
 
-export function getWaitingPatients(department: Department, doctorId?: string) {
-  return db
-    .prepare(`
-      SELECT a.*, s.name AS doctor_name, sv.name AS service_name, p.patient_number,
-             v.id AS visit_id, v.started_at AS visit_started_at
-      FROM appointments a
-      JOIN staff s ON s.id = a.doctor_id
-      LEFT JOIN services sv ON sv.id = a.service_id
-      LEFT JOIN patients p ON p.id = a.patient_id
-      LEFT JOIN visits v ON v.appointment_id = a.id
-      WHERE a.department = ? AND a.appointment_date = ?
-        AND a.status IN ('Checked In','Waiting for Doctor')
-        ${doctorId ? "AND a.doctor_id = ?" : ""}
-      ORDER BY a.appointment_time
-    `)
-    .all(...(doctorId ? [department, clinicToday(), doctorId] : [department, clinicToday()])) as (Appointment & {
-    visit_id: string | null;
-    visit_started_at: string | null;
-  })[];
+export async function getWaitingPatients(department: Department, doctorId?: string) {
+  const supabase = await createClient();
+  let query = supabase
+    .from("appointments")
+    .select(`${appointmentSelect}, visits(id, started_at)`)
+    .eq("department", department)
+    .eq("appointment_date", clinicToday())
+    .in("status", ["Checked In", "Waiting for Doctor"]);
+  if (doctorId) query = query.eq("doctor_id", doctorId);
+
+  const { data, error } = await query.order("appointment_time");
+  fail(error);
+
+  return (data ?? []).map((row: Row) => {
+    const appointment = mapAppointment(row);
+    const visit = Array.isArray(row.visits) ? row.visits[0] : row.visits;
+    return {
+      ...appointment,
+      visit_id: visit?.id ?? null,
+      visit_started_at: visit?.started_at ?? null,
+    };
+  });
 }
 
-export function getInConsultation(department: Department, doctorId?: string) {
-  return db
-    .prepare(`
-      SELECT a.*, s.name AS doctor_name, sv.name AS service_name, p.patient_number
-      FROM appointments a
-      JOIN staff s ON s.id = a.doctor_id
-      LEFT JOIN services sv ON sv.id = a.service_id
-      LEFT JOIN patients p ON p.id = a.patient_id
-      WHERE a.department = ? AND a.appointment_date = ? AND a.status = 'In Consultation'
-      ${doctorId ? "AND a.doctor_id = ?" : ""}
-      ORDER BY a.appointment_time
-    `)
-    .all(...(doctorId ? [department, clinicToday(), doctorId] : [department, clinicToday()])) as Appointment[];
+export async function getInConsultation(department: Department, doctorId?: string) {
+  const supabase = await createClient();
+  let query = supabase
+    .from("appointments")
+    .select(appointmentSelect)
+    .eq("department", department)
+    .eq("appointment_date", clinicToday())
+    .eq("status", "In Consultation");
+  if (doctorId) query = query.eq("doctor_id", doctorId);
+
+  const { data, error } = await query.order("appointment_time");
+  fail(error);
+  return (data ?? []).map(mapAppointment);
 }
 
-export function getRecentPatients(actorId: string, department: Department, limit = 5) {
-  return db
-    .prepare(`
-      SELECT DISTINCT p.*, MAX(al.created_at) AS last_viewed
-      FROM audit_logs al
-      JOIN patients p ON p.id = al.patient_id
-      WHERE al.actor_id = ? AND al.action = 'patient.view' AND al.entity_type = ?
-      GROUP BY p.id
-      ORDER BY last_viewed DESC
-      LIMIT ?
-    `)
-    .all(actorId, department === "dental" ? "dental_record" : "optical_record", limit) as (Patient & {
-    last_viewed: string;
-  })[];
+export async function getRecentPatients(actorId: string, department: Department, limit = 5) {
+  const supabase = await createClient();
+  const { data: logs, error: logError } = await supabase
+    .from("audit_logs")
+    .select("patient_id, created_at")
+    .eq("actor_id", actorId)
+    .eq("action", "patient.view")
+    .eq("entity_type", department === "dental" ? "dental_record" : "optical_record")
+    .not("patient_id", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(limit * 4);
+  fail(logError);
+
+  const lastViewed = new Map<string, string>();
+  for (const row of (logs ?? []) as { patient_id: string; created_at: string }[]) {
+    if (!lastViewed.has(row.patient_id)) lastViewed.set(row.patient_id, row.created_at);
+  }
+  const ids = [...lastViewed.keys()].slice(0, limit);
+  if (!ids.length) return [];
+
+  const { data: patients, error } = await supabase.from("patients").select("*").in("id", ids);
+  fail(error);
+
+  return ((patients ?? []) as Patient[])
+    .map((patient) => ({ ...patient, last_viewed: lastViewed.get(patient.id) ?? patient.created_at }))
+    .sort((a, b) => b.last_viewed.localeCompare(a.last_viewed))
+    .slice(0, limit);
 }
 
-export function getVisitsForPatient(patientId: string) {
-  return db
-    .prepare(`
-      SELECT v.*, s.name AS doctor_name
-      FROM visits v LEFT JOIN staff s ON s.id = v.doctor_id
-      WHERE v.patient_id = ? ORDER BY v.created_at DESC
-    `)
-    .all(patientId) as (Visit & { doctor_name: string | null })[];
+export async function getVisitsForPatient(patientId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("visits")
+    .select("*, staff!visits_doctor_id_fkey(name)")
+    .eq("patient_id", patientId)
+    .order("created_at", { ascending: false });
+  fail(error);
+  return (data ?? []).map(mapVisit);
 }
 
-export function getActiveVisit(patientId: string, department: Department) {
-  return db
-    .prepare(`
-      SELECT v.*, s.name AS doctor_name
-      FROM visits v LEFT JOIN staff s ON s.id = v.doctor_id
-      WHERE v.patient_id = ? AND v.department = ? AND v.status IN ('Waiting','In Consultation')
-      ORDER BY v.created_at DESC LIMIT 1
-    `)
-    .get(patientId, department) as (Visit & { doctor_name: string | null }) | undefined;
+export async function getActiveVisit(patientId: string, department: Department) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("visits")
+    .select("*, staff!visits_doctor_id_fkey(name)")
+    .eq("patient_id", patientId)
+    .eq("department", department)
+    .in("status", ["Waiting", "In Consultation"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  fail(error);
+  return data ? mapVisit(data) : undefined;
 }
 
-export function getVisit(id: string) {
-  return db
-    .prepare(`
-      SELECT v.*, s.name AS doctor_name
-      FROM visits v LEFT JOIN staff s ON s.id = v.doctor_id
-      WHERE v.id = ?
-    `)
-    .get(id) as (Visit & { doctor_name: string | null }) | undefined;
+export async function getVisit(id: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("visits")
+    .select("*, staff!visits_doctor_id_fkey(name)")
+    .eq("id", id)
+    .maybeSingle();
+  fail(error);
+  return data ? mapVisit(data) : undefined;
 }
 
-export function getAppointmentForVisit(visitId: string) {
-  return db
-    .prepare(`
-      ${appointmentSelect}
-      JOIN visits v ON v.appointment_id = a.id
-      WHERE v.id = ?
-    `)
-    .get(visitId) as Appointment | undefined;
+export async function getAppointmentForVisit(visitId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("appointments")
+    .select(`${appointmentSelect}, visits!inner(id)`)
+    .eq("visits.id", visitId)
+    .maybeSingle();
+  fail(error);
+  return data ? mapAppointment(data) : undefined;
 }
 
-export function getVitalsForPatient(patientId: string) {
-  return db
-    .prepare(`
-      SELECT vi.*, s.name AS recorded_by_name
-      FROM vitals vi LEFT JOIN staff s ON s.id = vi.recorded_by
-      WHERE vi.patient_id = ? ORDER BY vi.recorded_at DESC
-    `)
-    .all(patientId) as Vitals[];
+export async function getVitalsForPatient(patientId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("vitals")
+    .select("*, staff!vitals_recorded_by_fkey(name)")
+    .eq("patient_id", patientId)
+    .order("recorded_at", { ascending: false });
+  fail(error);
+  return (data ?? []).map(mapVitals);
 }
 
-export function getLatestVitals(patientId: string) {
-  return db
-    .prepare(`
-      SELECT vi.*, s.name AS recorded_by_name
-      FROM vitals vi LEFT JOIN staff s ON s.id = vi.recorded_by
-      WHERE vi.patient_id = ? ORDER BY vi.recorded_at DESC LIMIT 1
-    `)
-    .get(patientId) as Vitals | undefined;
+export async function getLatestVitals(patientId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("vitals")
+    .select("*, staff!vitals_recorded_by_fkey(name)")
+    .eq("patient_id", patientId)
+    .order("recorded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  fail(error);
+  return data ? mapVitals(data) : undefined;
 }
 
-export function getDentalVisits(patientId: string) {
-  return db
-    .prepare(`
-      SELECT dv.*, s.name AS doctor_name
-      FROM dental_visits dv LEFT JOIN staff s ON s.id = dv.doctor_id
-      WHERE dv.patient_id = ? ORDER BY dv.visit_date DESC, dv.created_at DESC
-    `)
-    .all(patientId) as DentalVisit[];
+export async function getDentalVisits(patientId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("dental_visits")
+    .select("*, staff!dental_visits_doctor_id_fkey(name)")
+    .eq("patient_id", patientId)
+    .order("visit_date", { ascending: false })
+    .order("created_at", { ascending: false });
+  fail(error);
+  return (data ?? []).map(mapDentalVisit);
 }
 
-export function getToothFindings(patientId: string, dentalVisitId?: string) {
-  return db
-    .prepare(`
-      SELECT * FROM tooth_findings
-      WHERE patient_id = ? ${dentalVisitId ? "AND dental_visit_id = ?" : ""}
-      ORDER BY dental_visit_id DESC, tooth_number
-    `)
-    .all(...(dentalVisitId ? [patientId, dentalVisitId] : [patientId])) as ToothFinding[];
+export async function getToothFindings(patientId: string, dentalVisitId?: string) {
+  const supabase = await createClient();
+  let query = supabase.from("tooth_findings").select("*").eq("patient_id", patientId);
+  if (dentalVisitId) query = query.eq("dental_visit_id", dentalVisitId);
+
+  const { data, error } = await query
+    .order("dental_visit_id", { ascending: false })
+    .order("tooth_number");
+  fail(error);
+  return (data ?? []).map(mapToothFinding);
 }
 
-export function getTreatmentPlans(patientId: string) {
-  return db
-    .prepare("SELECT * FROM treatment_plans WHERE patient_id = ? ORDER BY created_at DESC")
-    .all(patientId) as TreatmentPlan[];
+export async function getTreatmentPlans(patientId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("treatment_plans")
+    .select("*")
+    .eq("patient_id", patientId)
+    .order("created_at", { ascending: false });
+  fail(error);
+  return (data ?? []).map(mapTreatmentPlan);
 }
 
-export function getOpticalVisits(patientId: string) {
-  return db
-    .prepare(`
-      SELECT ov.*, s.name AS doctor_name
-      FROM optical_visits ov LEFT JOIN staff s ON s.id = ov.doctor_id
-      WHERE ov.patient_id = ? ORDER BY ov.visit_date DESC, ov.created_at DESC
-    `)
-    .all(patientId) as OpticalVisit[];
+export async function getOpticalVisits(patientId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("optical_visits")
+    .select("*, staff!optical_visits_doctor_id_fkey(name)")
+    .eq("patient_id", patientId)
+    .order("visit_date", { ascending: false })
+    .order("created_at", { ascending: false });
+  fail(error);
+  return (data ?? []).map(mapOpticalVisit);
 }
 
-export function getOpticalPrescriptions(patientId: string) {
-  return db
-    .prepare(`
-      SELECT op.*, s.name AS doctor_name
-      FROM optical_prescriptions op LEFT JOIN staff s ON s.id = op.doctor_id
-      WHERE op.patient_id = ? ORDER BY op.prescribed_at DESC
-    `)
-    .all(patientId) as OpticalPrescription[];
+export async function getOpticalPrescriptions(patientId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("optical_prescriptions")
+    .select("*, staff!optical_prescriptions_doctor_id_fkey(name)")
+    .eq("patient_id", patientId)
+    .order("prescribed_at", { ascending: false });
+  fail(error);
+  return (data ?? []).map(mapPrescription);
 }
 
-export function getDoctorSchedule(doctorId: string, date: string) {
-  return db
-    .prepare("SELECT * FROM doctor_schedules WHERE doctor_id = ? AND weekday = ? AND active = 1")
-    .get(doctorId, weekdayNumber(date)) as
-    | {
-        id: string;
-        doctor_id: string;
-        weekday: number;
-        start_time: string;
-        end_time: string;
-        break_start: string | null;
-        break_end: string | null;
-        slot_minutes: number;
-        active: number;
-      }
-    | undefined;
+export async function getDoctorSchedule(doctorId: string, date: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("doctor_schedules")
+    .select("*")
+    .eq("doctor_id", doctorId)
+    .eq("weekday", weekdayNumber(date))
+    .eq("active", true)
+    .maybeSingle();
+  fail(error);
+  if (!data) return undefined;
+
+  return {
+    id: data.id,
+    doctor_id: data.doctor_id,
+    weekday: data.weekday,
+    start_time: shortTime(data.start_time) ?? "",
+    end_time: shortTime(data.end_time) ?? "",
+    break_start: shortTime(data.break_start),
+    break_end: shortTime(data.break_end),
+    slot_minutes: data.slot_minutes,
+    active: boolInt(data.active),
+  };
 }
 
-export function getAvailableSlots(doctorId: string, date: string, duration = 30) {
-  const schedule = getDoctorSchedule(doctorId, date);
+export async function getAvailableSlots(doctorId: string, date: string, duration = 30) {
+  const schedule = await getDoctorSchedule(doctorId, date);
   if (!schedule) return [];
+
   const candidates = timeSlots(
     schedule.start_time,
     schedule.end_time,
@@ -457,279 +807,304 @@ export function getAvailableSlots(doctorId: string, date: string, duration = 30)
     schedule.break_start,
     schedule.break_end,
   );
-  const existing = db
-    .prepare(`
-      SELECT appointment_time, duration_minutes FROM appointments
-      WHERE doctor_id = ? AND appointment_date = ? AND status NOT IN ('Cancelled','No Show')
-    `)
-    .all(doctorId, date) as { appointment_time: string; duration_minutes: number }[];
 
-  const blocked = db
-    .prepare("SELECT start_at, end_at FROM blocked_periods WHERE doctor_id = ? AND date(start_at) <= ? AND date(end_at) >= ?")
-    .all(doctorId, date, date) as { start_at: string; end_at: string }[];
+  const supabase = await createClient();
+  const [{ data: existing, error: appointmentError }, { data: blocked, error: blockedError }] =
+    await Promise.all([
+      supabase
+        .from("appointments")
+        .select("appointment_time, duration_minutes")
+        .eq("doctor_id", doctorId)
+        .eq("appointment_date", date)
+        .not("status", "in", "(Cancelled,No Show)"),
+      supabase
+        .from("blocked_periods")
+        .select("start_at, end_at")
+        .eq("doctor_id", doctorId)
+        .lte("start_at", `${date}T23:59:59+03:00`)
+        .gte("end_at", `${date}T00:00:00+03:00`),
+    ]);
+  fail(appointmentError);
+  fail(blockedError);
+
+  const appointments = (existing ?? []) as { appointment_time: string; duration_minutes: number }[];
+  const periods = (blocked ?? []) as { start_at: string; end_at: string }[];
 
   return candidates.map((slot) => {
     const start = minutesFromTime(slot);
     const end = start + duration;
-    const overlaps = existing.some((a) => {
-      const aStart = minutesFromTime(a.appointment_time);
-      const aEnd = aStart + a.duration_minutes;
-      return start < aEnd && end > aStart;
+    const overlaps = appointments.some((appointment) => {
+      const appointmentStart = minutesFromTime(shortTime(appointment.appointment_time) ?? "00:00");
+      const appointmentEnd = appointmentStart + appointment.duration_minutes;
+      return start < appointmentEnd && end > appointmentStart;
     });
-    const isBlocked = blocked.some((b) => {
-      const bStart = new Date(b.start_at).getTime();
-      const bEnd = new Date(b.end_at).getTime();
-      const slotStart = new Date(`${date}T${slot}:00`).getTime();
-      const slotEnd = new Date(`${date}T${addMinutesToTime(slot, duration)}:00`).getTime();
-      return slotStart < bEnd && slotEnd > bStart;
+    const isBlocked = periods.some((period) => {
+      const periodStart = new Date(period.start_at).getTime();
+      const periodEnd = new Date(period.end_at).getTime();
+      const slotStart = new Date(`${date}T${slot}:00+03:00`).getTime();
+      const slotEnd = new Date(`${date}T${addMinutesToTime(slot, duration)}:00+03:00`).getTime();
+      return slotStart < periodEnd && slotEnd > periodStart;
     });
     return { time: slot, available: !overlaps && !isBlocked };
   });
 }
 
-export function hasAppointmentOverlap(doctorId: string, date: string, time: string, duration: number, excludeId?: string) {
+export async function hasAppointmentOverlap(
+  doctorId: string,
+  date: string,
+  time: string,
+  duration: number,
+  excludeId?: string,
+) {
+  const supabase = await createClient();
+  let query = supabase
+    .from("appointments")
+    .select("id, appointment_time, duration_minutes")
+    .eq("doctor_id", doctorId)
+    .eq("appointment_date", date)
+    .not("status", "in", "(Cancelled,No Show)");
+  if (excludeId) query = query.neq("id", excludeId);
+
+  const { data, error } = await query;
+  fail(error);
+
   const start = minutesFromTime(time);
   const end = start + duration;
-  const rows = db
-    .prepare(`
-      SELECT id, appointment_time, duration_minutes FROM appointments
-      WHERE doctor_id = ? AND appointment_date = ? AND status NOT IN ('Cancelled','No Show')
-      ${excludeId ? "AND id <> ?" : ""}
-    `)
-    .all(...(excludeId ? [doctorId, date, excludeId] : [doctorId, date])) as {
-    id: string;
-    appointment_time: string;
-    duration_minutes: number;
-  }[];
-  return rows.some((a) => {
-    const aStart = minutesFromTime(a.appointment_time);
-    const aEnd = aStart + a.duration_minutes;
-    return start < aEnd && end > aStart;
+  return ((data ?? []) as { appointment_time: string; duration_minutes: number }[]).some((appointment) => {
+    const appointmentStart = minutesFromTime(shortTime(appointment.appointment_time) ?? "00:00");
+    const appointmentEnd = appointmentStart + appointment.duration_minutes;
+    return start < appointmentEnd && end > appointmentStart;
   });
 }
 
-export function getStaffList() {
-  return db
-    .prepare("SELECT id, name, email, role, title, active, created_at FROM staff ORDER BY role, name")
-    .all() as StaffUser[];
+export async function getStaffList() {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("staff")
+    .select("id, name, email, role, title, active, created_at")
+    .order("role")
+    .order("name");
+  fail(error);
+  return (data ?? []).map(mapStaff);
 }
 
-export function getStaff(id: string) {
-  return db.prepare("SELECT * FROM staff WHERE id = ?").get(id) as (StaffUser & { password_hash: string }) | undefined;
+export async function getStaff(id: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("staff")
+    .select("id, name, email, role, title, active, created_at")
+    .eq("id", id)
+    .maybeSingle();
+  fail(error);
+  return data ? mapStaff(data) : undefined;
 }
 
-export function getAuditLogs(limit = 100) {
-  return db.prepare("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?").all(limit) as AuditLog[];
+export async function getAuditLogs(limit = 100) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("audit_logs")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  fail(error);
+  return (data ?? []) as AuditLog[];
 }
 
-export function getSettings() {
-  const rows = db.prepare("SELECT key, value FROM clinic_settings ORDER BY key").all() as {
-    key: string;
-    value: string;
-  }[];
-  return Object.fromEntries(rows.map((r) => [r.key, r.value])) as Record<string, string>;
+export async function getSettings() {
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("clinic_settings").select("key, value").order("key");
+  fail(error);
+  return Object.fromEntries(((data ?? []) as { key: string; value: string }[]).map((row) => [row.key, row.value]));
 }
 
-export function setSetting(key: string, value: string) {
-  db.prepare(`
-    INSERT INTO clinic_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-  `).run(key, value);
+export async function setSetting(key: string, value: string) {
+  const supabase = await createClient();
+  const { error } = await supabase.from("clinic_settings").upsert(
+    { key, value, updated_at: new Date().toISOString() },
+    { onConflict: "key" },
+  );
+  fail(error);
 }
 
-export function getSchedules() {
-  return db
-    .prepare(`
-      SELECT ds.*, s.name AS doctor_name
-      FROM doctor_schedules ds JOIN staff s ON s.id = ds.doctor_id
-      ORDER BY s.name, ds.weekday
-    `)
-    .all() as {
-    id: string;
-    doctor_id: string;
-    doctor_name: string;
-    weekday: number;
-    start_time: string;
-    end_time: string;
-    break_start: string | null;
-    break_end: string | null;
-    slot_minutes: number;
-    active: number;
-  }[];
+export async function getSchedules() {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("doctor_schedules")
+    .select("*, staff!doctor_schedules_doctor_id_fkey(name)");
+  fail(error);
+
+  return ((data ?? []) as Row[])
+    .map((row) => ({
+      id: row.id,
+      doctor_id: row.doctor_id,
+      doctor_name: row.staff?.name ?? "Unknown clinician",
+      weekday: row.weekday,
+      start_time: shortTime(row.start_time) ?? "",
+      end_time: shortTime(row.end_time) ?? "",
+      break_start: shortTime(row.break_start),
+      break_end: shortTime(row.break_end),
+      slot_minutes: row.slot_minutes,
+      active: boolInt(row.active),
+    }))
+    .sort((a, b) => a.doctor_name.localeCompare(b.doctor_name) || a.weekday - b.weekday);
 }
 
-export function getReports(date: string) {
-  const daily = db
-    .prepare(`
-      SELECT department, status, COUNT(*) AS count
-      FROM appointments WHERE appointment_date = ?
-      GROUP BY department, status ORDER BY department, status
-    `)
-    .all(date) as { department: Department; status: AppointmentStatus; count: number }[];
-
-  const registrations = db
-    .prepare("SELECT COUNT(*) AS count FROM patients WHERE date(created_at) = ?")
-    .get(date) as { count: number };
-  const registrationsMonth = db
-    .prepare("SELECT COUNT(*) AS count FROM patients WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', ?)")
-    .get(date) as { count: number };
-
-  const dentalCompleted = db
-    .prepare("SELECT COUNT(*) AS count FROM dental_visits WHERE visit_date = ?")
-    .get(date) as { count: number };
-  const opticalCompleted = db
-    .prepare("SELECT COUNT(*) AS count FROM optical_visits WHERE visit_date = ?")
-    .get(date) as { count: number };
-
-  const dentalFollowUps = db
-    .prepare("SELECT COUNT(*) AS count FROM treatment_plans WHERE next_review_date IS NOT NULL AND next_review_date <= ? AND status IN ('Planned','In Progress')")
-    .get(date) as { count: number };
-  const opticalFollowUps = db
-    .prepare("SELECT COUNT(*) AS count FROM optical_visits WHERE follow_up_date IS NOT NULL AND follow_up_date <= ?")
-    .get(date) as { count: number };
-
-  const waiting = db
-    .prepare(`
-      SELECT ROUND(AVG((julianday(v.started_at) - julianday(a.checked_in_at)) * 24 * 60)) AS minutes
-      FROM visits v JOIN appointments a ON a.id = v.appointment_id
-      WHERE v.started_at IS NOT NULL AND a.checked_in_at IS NOT NULL AND a.appointment_date = ?
-    `)
-    .get(date) as { minutes: number | null };
-
-  const cancellations = db
-    .prepare("SELECT COUNT(*) AS count FROM appointments WHERE appointment_date = ? AND status = 'Cancelled'")
-    .get(date) as { count: number };
-  const noShows = db
-    .prepare("SELECT COUNT(*) AS count FROM appointments WHERE appointment_date = ? AND status = 'No Show'")
-    .get(date) as { count: number };
-
-  return {
-    daily,
-    registrations: registrations.count,
-    registrationsMonth: registrationsMonth.count,
-    dentalCompleted: dentalCompleted.count,
-    opticalCompleted: opticalCompleted.count,
-    followUpsDue: dentalFollowUps.count + opticalFollowUps.count,
-    averageWaitMinutes: waiting.minutes,
-    cancellations: cancellations.count,
-    noShows: noShows.count,
+export async function getReports(date: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("admin_reports", { p_date: date });
+  fail(error);
+  return data as {
+    daily: { department: Department; status: AppointmentStatus; count: number }[];
+    registrations: number;
+    registrationsMonth: number;
+    dentalCompleted: number;
+    opticalCompleted: number;
+    followUpsDue: number;
+    averageWaitMinutes: number | null;
+    cancellations: number;
+    noShows: number;
   };
 }
 
-export function getNotificationRows(limit = 40) {
-  return db
-    .prepare("SELECT * FROM notifications ORDER BY created_at DESC LIMIT ?")
-    .all(limit) as {
-    id: string;
-    appointment_id: string | null;
-    channel: string;
-    recipient: string;
-    template: string;
-    status: string;
-    payload: string | null;
-    error: string | null;
-    sent_at: string | null;
-    created_at: string;
-  }[];
+export async function getNotificationRows(limit = 40) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("notifications")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  fail(error);
+  return (data ?? []).map(mapNotification);
 }
 
-export function getNotificationsForAppointment(appointmentId: string) {
-  return db
-    .prepare("SELECT * FROM notifications WHERE appointment_id = ? ORDER BY created_at DESC LIMIT 20")
-    .all(appointmentId) as {
-    id: string;
-    channel: string;
-    recipient: string;
-    template: string;
-    status: string;
-    error: string | null;
-    sent_at: string | null;
-    created_at: string;
-  }[];
+export async function getNotificationsForAppointment(appointmentId: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("notifications")
+    .select("*")
+    .eq("appointment_id", appointmentId)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  fail(error);
+  return (data ?? []).map(mapNotification);
 }
 
-export function getAuditForEntity(entityType: string, entityId: string, limit = 20) {
-  return db
-    .prepare("SELECT * FROM audit_logs WHERE entity_type = ? AND entity_id = ? ORDER BY created_at DESC LIMIT ?")
-    .all(entityType, entityId, limit) as AuditLog[];
+export async function getAuditForEntity(entityType: string, entityId: string, limit = 20) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("audit_logs")
+    .select("*")
+    .eq("entity_type", entityType)
+    .eq("entity_id", entityId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  fail(error);
+  return (data ?? []) as AuditLog[];
 }
 
-export function getAdminOverview(date: string) {
-  const staff = db
-    .prepare("SELECT role, COUNT(*) AS count, SUM(active) AS active FROM staff GROUP BY role")
-    .all() as { role: string; count: number; active: number }[];
-  const patients = db.prepare("SELECT COUNT(*) AS count FROM patients").get() as { count: number };
-  const newPatients = db
-    .prepare("SELECT COUNT(*) AS count FROM patients WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', ?)")
-    .get(date) as { count: number };
-  const appointments = db
-    .prepare("SELECT COUNT(*) AS count FROM appointments WHERE appointment_date = ?")
-    .get(date) as { count: number };
-  const failedNotifications = db
-    .prepare("SELECT COUNT(*) AS count FROM notifications WHERE status = 'failed'")
-    .get() as { count: number };
-  const pendingFollowUps = db
-    .prepare("SELECT COUNT(*) AS count FROM treatment_plans WHERE status IN ('Planned','In Progress') AND next_review_date IS NOT NULL AND next_review_date <= ?")
-    .get(date) as { count: number };
-  return {
-    staff,
-    staffTotal: staff.reduce((sum, row) => sum + row.count, 0),
-    staffActive: staff.reduce((sum, row) => sum + (row.active ?? 0), 0),
-    patients: patients.count,
-    newPatients: newPatients.count,
-    appointments: appointments.count,
-    failedNotifications: failedNotifications.count,
-    pendingFollowUps: pendingFollowUps.count,
+export async function getAdminOverview(date: string) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("admin_overview", { p_date: date });
+  fail(error);
+  return data as {
+    staff: { role: string; count: number; active: number }[];
+    staffTotal: number;
+    staffActive: number;
+    patients: number;
+    newPatients: number;
+    appointments: number;
+    failedNotifications: number;
+    pendingFollowUps: number;
   };
 }
 
-export function getAppointmentTrend(days = 7) {
-  return db
-    .prepare(`
-      SELECT appointment_date AS date, COUNT(*) AS count,
-             SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) AS completed,
-             SUM(CASE WHEN status IN ('Cancelled','No Show') THEN 1 ELSE 0 END) AS missed
-      FROM appointments
-      WHERE appointment_date >= date('now', ?)
-      GROUP BY appointment_date ORDER BY appointment_date
-    `)
-    .all(`-${days - 1} days`) as { date: string; count: number; completed: number; missed: number }[];
+export async function getAppointmentTrend(days = 7) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("admin_appointment_trend", { p_days: days });
+  fail(error);
+  return (data ?? []) as { date: string; count: number; completed: number; missed: number }[];
 }
 
-export function getFollowUpsDue(department?: Department) {
+export async function getFollowUpsDue(department?: Department) {
+  const supabase = await createClient();
+
+  if (!department) {
+    const { data, error } = await supabase.rpc("admin_follow_ups_due");
+    fail(error);
+    return (data ?? []) as {
+      id: string;
+      patient_id: string;
+      dental_visit_id: string | null;
+      tooth_numbers: string;
+      diagnosis: string;
+      procedure: string;
+      priority: string;
+      estimated_cost: number | null;
+      status: string;
+      notes: string | null;
+      next_review_date: string | null;
+      created_by: string;
+      created_at: string;
+      updated_at: string;
+      full_name: string;
+      patient_number: string;
+      phone: string;
+      department: Department;
+    }[];
+  }
+
   if (department === "dental") {
-    return db
-      .prepare(`
-        SELECT tp.*, p.full_name, p.patient_number, p.phone
-        FROM treatment_plans tp JOIN patients p ON p.id = tp.patient_id
-        WHERE tp.next_review_date IS NOT NULL AND tp.next_review_date <= ? AND tp.status IN ('Planned','In Progress')
-        ORDER BY tp.next_review_date
-      `)
-      .all(clinicToday());
+    const { data, error } = await supabase
+      .from("treatment_plans")
+      .select("*, patients!inner(full_name, patient_number, phone)")
+      .not("next_review_date", "is", null)
+      .lte("next_review_date", clinicToday())
+      .in("status", ["Planned", "In Progress"])
+      .order("next_review_date");
+    fail(error);
+
+    return ((data ?? []) as Row[]).map((row) => ({
+      ...mapTreatmentPlan(row),
+      full_name: row.patients?.full_name ?? "",
+      patient_number: row.patients?.patient_number ?? "",
+      phone: row.patients?.phone ?? "",
+    }));
   }
-  if (department === "optical") {
-    return db
-      .prepare(`
-        SELECT ov.*, p.full_name, p.patient_number, p.phone
-        FROM optical_visits ov JOIN patients p ON p.id = ov.patient_id
-        WHERE ov.follow_up_date IS NOT NULL AND ov.follow_up_date <= ?
-        ORDER BY ov.follow_up_date
-      `)
-      .all(clinicToday());
-  }
-  return db
-    .prepare(`
-      SELECT tp.*, p.full_name, p.patient_number, p.phone, 'dental' AS department
-      FROM treatment_plans tp JOIN patients p ON p.id = tp.patient_id
-      WHERE tp.next_review_date IS NOT NULL AND tp.next_review_date <= ? AND tp.status IN ('Planned','In Progress')
-      UNION ALL
-      SELECT ov.id, ov.patient_id, ov.visit_id, '' AS tooth_numbers, ov.diagnosis, 'Optical follow-up' AS procedure,
-        'Medium' AS priority, NULL AS estimated_cost, 'Planned' AS status, ov.management_plan AS notes,
-        ov.follow_up_date AS next_review_date, ov.doctor_id AS created_by, ov.created_at, ov.updated_at,
-        p.full_name, p.patient_number, p.phone, 'optical' AS department
-      FROM optical_visits ov JOIN patients p ON p.id = ov.patient_id
-      WHERE ov.follow_up_date IS NOT NULL AND ov.follow_up_date <= ?
-      ORDER BY next_review_date
-    `)
-    .all(clinicToday(), clinicToday());
+
+  const { data, error } = await supabase
+    .from("optical_visits")
+    .select("*, patients!inner(full_name, patient_number, phone)")
+    .not("follow_up_date", "is", null)
+    .lte("follow_up_date", clinicToday())
+    .order("follow_up_date");
+  fail(error);
+
+  return ((data ?? []) as Row[]).map((row) => {
+    const visit = mapOpticalVisit(row);
+    return {
+      ...visit,
+      id: visit.id,
+      patient_id: visit.patient_id,
+      dental_visit_id: null,
+      tooth_numbers: "",
+      diagnosis: visit.diagnosis ?? "",
+      procedure: "Optical follow-up",
+      priority: "Medium",
+      estimated_cost: null,
+      status: "Planned",
+      next_review_date: visit.follow_up_date,
+      created_by: visit.doctor_id,
+      full_name: row.patients?.full_name ?? "",
+      patient_number: row.patients?.patient_number ?? "",
+      phone: row.patients?.phone ?? "",
+    };
+  });
+}
+
+/** Atomic patient-number allocation for the front desk. */
+export async function nextPatientNumber() {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("next_patient_number");
+  fail(error);
+  return data as string;
 }

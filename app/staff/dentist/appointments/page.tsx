@@ -23,7 +23,7 @@ export default async function DentistAppointmentsPage({
   const status = APPOINTMENT_STATUSES.includes(params.status as AppointmentStatus)
     ? (params.status as AppointmentStatus)
     : undefined;
-  const appointments = getAppointments({
+  const appointments = await getAppointments({
     doctorId: user.id,
     department: "dental",
     date: date || undefined,

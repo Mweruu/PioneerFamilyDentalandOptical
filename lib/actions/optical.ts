@@ -2,7 +2,7 @@
 
 import { requireStaffApi } from "../auth";
 import { logAudit } from "../audit";
-import { db } from "../db";
+import { createClient } from "../supabase/server";
 import { getAppointment, getOpticalVisit, getPatient } from "../data/queries";
 import { clinicToday, nowIso } from "../utils";
 import {
@@ -15,8 +15,8 @@ import {
   text,
 } from "./helpers";
 
-function ownedOpticalVisit(id: string, doctorId: string) {
-  const visit = getOpticalVisit(id);
+async function ownedOpticalVisit(id: string, doctorId: string) {
+  const visit = await getOpticalVisit(id);
   if (!visit) throw new Error("Optical visit not found.");
   if (visit.doctor_id !== doctorId) throw new Error("You can only edit optical records you created.");
   return visit;
@@ -31,7 +31,7 @@ function validAxis(value: string | null) {
 export async function startOpticalConsultationAction(formData: FormData) {
   const user = await requireStaffApi("eye_doctor");
   const appointmentId = text(formData, "appointmentId", 60);
-  const appointment = getAppointment(appointmentId);
+  const appointment = await getAppointment(appointmentId);
   if (!appointment) return redirectError("/staff/optometrist", "Appointment not found.");
   if (appointment.department !== "optical") return redirectError("/staff/optometrist", "That appointment is not an optical visit.");
   if (appointment.doctor_id !== user.id) return redirectError("/staff/optometrist", "That appointment is assigned to another eye doctor.");
@@ -42,47 +42,68 @@ export async function startOpticalConsultationAction(formData: FormData) {
     return redirectError(`/staff/optometrist/appointments/${appointmentId}`, "Reception must link this booking to a patient record first.");
   }
 
+  const supabase = await createClient();
   const now = nowIso();
-  let visit = db
-    .prepare("SELECT id, started_at FROM visits WHERE appointment_id = ? ORDER BY created_at DESC LIMIT 1")
-    .get(appointmentId) as { id: string; started_at: string | null } | undefined;
+  const { data: visit } = await supabase
+    .from("visits")
+    .select("id, started_at")
+    .eq("appointment_id", appointmentId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-  const existingOptical = visit
-    ? (db.prepare("SELECT id FROM optical_visits WHERE visit_id = ?").get(visit.id) as { id: string } | undefined)
-    : undefined;
-  if (existingOptical) {
-    return redirectSuccess(`/staff/optometrist/consultations/${existingOptical.id}`, "Consultation already in progress.");
+  if (visit) {
+    const { data: existingOptical } = await supabase
+      .from("optical_visits")
+      .select("id")
+      .eq("visit_id", visit.id)
+      .maybeSingle();
+    if (existingOptical) {
+      return redirectSuccess(`/staff/optometrist/consultations/${existingOptical.id}`, "Consultation already in progress.");
+    }
   }
 
-  const opticalVisitId = `ov_${crypto.randomUUID()}`;
+  const opticalVisitId = crypto.randomUUID();
+  let visitId = visit?.id ?? null;
 
-  db.transaction(() => {
-    if (!visit) {
-      visit = { id: `vis_${crypto.randomUUID()}`, started_at: now };
-      db.prepare(`
-        INSERT INTO visits (id, patient_id, appointment_id, department, doctor_id, status, started_at, created_at)
-        VALUES (?, ?, ?, 'optical', ?, 'In Consultation', ?, ?)
-      `).run(visit.id, appointment.patient_id, appointmentId, user.id, now, now);
-    } else {
-      db.prepare("UPDATE visits SET status = 'In Consultation', doctor_id = ?, started_at = COALESCE(started_at, ?) WHERE id = ?").run(
-        user.id,
-        now,
-        visit.id,
-      );
-    }
+  if (visitId) {
+    const { error } = await supabase
+      .from("visits")
+      .update({ status: "In Consultation", doctor_id: user.id, started_at: visit?.started_at ?? now })
+      .eq("id", visitId);
+    if (error) return redirectError(`/staff/optometrist/appointments/${appointmentId}`, "The consultation could not be started.");
+  } else {
+    visitId = crypto.randomUUID();
+    const { error } = await supabase.from("visits").insert({
+      id: visitId,
+      patient_id: appointment.patient_id,
+      appointment_id: appointmentId,
+      department: "optical",
+      doctor_id: user.id,
+      status: "In Consultation",
+      started_at: now,
+      created_at: now,
+    });
+    if (error) return redirectError(`/staff/optometrist/appointments/${appointmentId}`, "The consultation could not be started.");
+  }
 
-    db.prepare(`
-      INSERT INTO optical_visits (id, patient_id, visit_id, doctor_id, visit_date, presenting_complaint, symptoms,
-        created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
-    `).run(opticalVisitId, appointment.patient_id, visit.id, user.id, clinicToday(), appointment.reason, now, now);
+  const { error: opticalError } = await supabase.from("optical_visits").insert({
+    id: opticalVisitId,
+    patient_id: appointment.patient_id,
+    visit_id: visitId,
+    doctor_id: user.id,
+    visit_date: clinicToday(),
+    presenting_complaint: appointment.reason,
+    symptoms: null,
+    created_at: now,
+    updated_at: now,
+  });
+  if (opticalError) return redirectError(`/staff/optometrist/appointments/${appointmentId}`, "The optical record could not be created.");
 
-    db.prepare("UPDATE appointments SET status = 'In Consultation', checked_in_at = COALESCE(checked_in_at, ?), updated_at = ? WHERE id = ?").run(
-      now,
-      now,
-      appointmentId,
-    );
-  })();
+  await supabase
+    .from("appointments")
+    .update({ status: "In Consultation", checked_in_at: appointment.checked_in_at ?? now, updated_at: now })
+    .eq("id", appointmentId);
 
   await logAudit({
     actorId: user.id,
@@ -101,7 +122,7 @@ export async function startOpticalConsultationAction(formData: FormData) {
 export async function saveOpticalVisitAction(formData: FormData) {
   const user = await requireStaffApi("eye_doctor");
   const opticalVisitId = text(formData, "opticalVisitId", 60);
-  const visit = ownedOpticalVisit(opticalVisitId, user.id);
+  const visit = await ownedOpticalVisit(opticalVisitId, user.id);
   const returnTo = formReturnPath(formData, `/staff/optometrist/consultations/${opticalVisitId}`);
   const followUpDate = optionalText(formData, "followUpDate", 10);
   if (followUpDate && !isValidDate(followUpDate)) return redirectError(returnTo, "Enter a valid follow-up date.");
@@ -112,35 +133,34 @@ export async function saveOpticalVisitAction(formData: FormData) {
   if (iopOd && !/^\d{1,2}(\.\d{1,2})?$/.test(iopOd)) return redirectError(returnTo, "Enter a valid right-eye IOP.");
   if (iopOs && !/^\d{1,2}(\.\d{1,2})?$/.test(iopOs)) return redirectError(returnTo, "Enter a valid left-eye IOP.");
 
-  db.prepare(`
-    UPDATE optical_visits SET presenting_complaint = ?, symptoms = ?, unaided_va_od = ?, unaided_va_os = ?,
-      pinhole_va_od = ?, pinhole_va_os = ?, corrected_va_od = ?, corrected_va_os = ?, external_examination = ?,
-      anterior_segment = ?, posterior_segment = ?, iop_od = ?, iop_os = ?, colour_vision = ?, diagnosis = ?,
-      management_plan = ?, referral = ?, follow_up_date = ?, notes = ?, updated_at = ?
-    WHERE id = ?
-  `).run(
-    optionalText(formData, "presentingComplaint", 2000),
-    symptoms.length ? JSON.stringify(symptoms) : null,
-    optionalText(formData, "unaidedVaOd", 20),
-    optionalText(formData, "unaidedVaOs", 20),
-    optionalText(formData, "pinholeVaOd", 20),
-    optionalText(formData, "pinholeVaOs", 20),
-    optionalText(formData, "correctedVaOd", 20),
-    optionalText(formData, "correctedVaOs", 20),
-    optionalText(formData, "externalExamination", 2000),
-    optionalText(formData, "anteriorSegment", 2000),
-    optionalText(formData, "posteriorSegment", 2000),
-    iopOd,
-    iopOs,
-    optionalText(formData, "colourVision", 200),
-    optionalText(formData, "diagnosis", 2000),
-    optionalText(formData, "managementPlan", 3000),
-    optionalText(formData, "referral", 1000),
-    followUpDate,
-    optionalText(formData, "notes", 2000),
-    nowIso(),
-    opticalVisitId,
-  );
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("optical_visits")
+    .update({
+      presenting_complaint: optionalText(formData, "presentingComplaint", 2000),
+      symptoms: symptoms.length ? symptoms : null,
+      unaided_va_od: optionalText(formData, "unaidedVaOd", 20),
+      unaided_va_os: optionalText(formData, "unaidedVaOs", 20),
+      pinhole_va_od: optionalText(formData, "pinholeVaOd", 20),
+      pinhole_va_os: optionalText(formData, "pinholeVaOs", 20),
+      corrected_va_od: optionalText(formData, "correctedVaOd", 20),
+      corrected_va_os: optionalText(formData, "correctedVaOs", 20),
+      external_examination: optionalText(formData, "externalExamination", 2000),
+      anterior_segment: optionalText(formData, "anteriorSegment", 2000),
+      posterior_segment: optionalText(formData, "posteriorSegment", 2000),
+      iop_od: iopOd,
+      iop_os: iopOs,
+      colour_vision: optionalText(formData, "colourVision", 200),
+      diagnosis: optionalText(formData, "diagnosis", 2000),
+      management_plan: optionalText(formData, "managementPlan", 3000),
+      referral: optionalText(formData, "referral", 1000),
+      follow_up_date: followUpDate,
+      notes: optionalText(formData, "notes", 2000),
+      updated_at: nowIso(),
+    })
+    .eq("id", opticalVisitId);
+
+  if (error) return redirectError(returnTo, "The eye examination could not be saved. Please try again.");
 
   await logAudit({
     actorId: user.id,
@@ -159,7 +179,7 @@ export async function saveOpticalVisitAction(formData: FormData) {
 export async function savePrescriptionAction(formData: FormData) {
   const user = await requireStaffApi("eye_doctor");
   const opticalVisitId = text(formData, "opticalVisitId", 60);
-  const visit = ownedOpticalVisit(opticalVisitId, user.id);
+  const visit = await ownedOpticalVisit(opticalVisitId, user.id);
   const returnTo = formReturnPath(formData, `/staff/optometrist/consultations/${opticalVisitId}`);
 
   const odAxis = optionalText(formData, "odAxis", 10);
@@ -171,38 +191,37 @@ export async function savePrescriptionAction(formData: FormData) {
   const osSph = optionalText(formData, "osSph", 20);
   if (!odSph && !osSph) return redirectError(returnTo, "Enter at least one spherical value for the prescription.");
 
-  db.prepare(`
-    INSERT INTO optical_prescriptions (id, patient_id, optical_visit_id, doctor_id, od_sph, od_cyl, od_axis,
-      od_add, od_prism, od_base, os_sph, os_cyl, os_axis, os_add, os_prism, os_base, pd, pd_od, pd_os,
-      lens_type, lens_recommendation, frame_recommendation, notes, prescribed_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    `rx_${crypto.randomUUID()}`,
-    visit.patient_id,
-    opticalVisitId,
-    user.id,
-    odSph,
-    optionalText(formData, "odCyl", 20),
-    odAxis,
-    optionalText(formData, "odAdd", 20),
-    optionalText(formData, "odPrism", 20),
-    optionalText(formData, "odBase", 20),
-    osSph,
-    optionalText(formData, "osCyl", 20),
-    osAxis,
-    optionalText(formData, "osAdd", 20),
-    optionalText(formData, "osPrism", 20),
-    optionalText(formData, "osBase", 20),
-    optionalText(formData, "pd", 20),
-    optionalText(formData, "pdOd", 20),
-    optionalText(formData, "pdOs", 20),
-    optionalText(formData, "lensType", 100),
-    optionalText(formData, "lensRecommendation", 1000),
-    optionalText(formData, "frameRecommendation", 1000),
-    optionalText(formData, "notes", 1000),
-    nowIso(),
-    nowIso(),
-  );
+  const supabase = await createClient();
+  const now = nowIso();
+  const { error } = await supabase.from("optical_prescriptions").insert({
+    id: crypto.randomUUID(),
+    patient_id: visit.patient_id,
+    optical_visit_id: opticalVisitId,
+    doctor_id: user.id,
+    od_sph: odSph,
+    od_cyl: optionalText(formData, "odCyl", 20),
+    od_axis: odAxis,
+    od_add: optionalText(formData, "odAdd", 20),
+    od_prism: optionalText(formData, "odPrism", 20),
+    od_base: optionalText(formData, "odBase", 20),
+    os_sph: osSph,
+    os_cyl: optionalText(formData, "osCyl", 20),
+    os_axis: osAxis,
+    os_add: optionalText(formData, "osAdd", 20),
+    os_prism: optionalText(formData, "osPrism", 20),
+    os_base: optionalText(formData, "osBase", 20),
+    pd: optionalText(formData, "pd", 20),
+    pd_od: optionalText(formData, "pdOd", 20),
+    pd_os: optionalText(formData, "pdOs", 20),
+    lens_type: optionalText(formData, "lensType", 100),
+    lens_recommendation: optionalText(formData, "lensRecommendation", 1000),
+    frame_recommendation: optionalText(formData, "frameRecommendation", 1000),
+    notes: optionalText(formData, "notes", 1000),
+    prescribed_at: now,
+    created_at: now,
+  });
+
+  if (error) return redirectError(returnTo, "The prescription could not be saved. Please try again.");
 
   await logAudit({
     actorId: user.id,
@@ -221,21 +240,30 @@ export async function savePrescriptionAction(formData: FormData) {
 export async function completeOpticalConsultationAction(formData: FormData) {
   const user = await requireStaffApi("eye_doctor");
   const opticalVisitId = text(formData, "opticalVisitId", 60);
-  const visit = ownedOpticalVisit(opticalVisitId, user.id);
+  const visit = await ownedOpticalVisit(opticalVisitId, user.id);
   const returnTo = `/staff/optometrist/patients/${visit.patient_id}`;
   const now = nowIso();
 
-  db.transaction(() => {
-    if (visit.visit_id) {
-      db.prepare("UPDATE visits SET status = 'Completed', completed_at = ? WHERE id = ?").run(now, visit.visit_id);
-      const linked = db.prepare("SELECT appointment_id FROM visits WHERE id = ?").get(visit.visit_id) as
-        | { appointment_id: string | null }
-        | undefined;
-      if (linked?.appointment_id) {
-        db.prepare("UPDATE appointments SET status = 'Completed', updated_at = ? WHERE id = ?").run(now, linked.appointment_id);
-      }
+  const supabase = await createClient();
+  if (visit.visit_id) {
+    await supabase
+      .from("visits")
+      .update({ status: "Completed", completed_at: now })
+      .eq("id", visit.visit_id);
+
+    const { data: linked } = await supabase
+      .from("visits")
+      .select("appointment_id")
+      .eq("id", visit.visit_id)
+      .maybeSingle();
+
+    if (linked?.appointment_id) {
+      await supabase
+        .from("appointments")
+        .update({ status: "Completed", updated_at: now })
+        .eq("id", linked.appointment_id);
     }
-  })();
+  }
 
   await logAudit({
     actorId: user.id,
@@ -254,34 +282,51 @@ export async function completeOpticalConsultationAction(formData: FormData) {
 export async function startOpticalForPatientAction(formData: FormData) {
   const user = await requireStaffApi("eye_doctor");
   const patientId = text(formData, "patientId", 60);
-  const patient = getPatient(patientId);
+  const patient = await getPatient(patientId);
   if (!patient) return redirectError("/staff/optometrist/patients", "Patient not found.");
 
-  const existing = db
-    .prepare(`
-      SELECT ov.id
-      FROM optical_visits ov
-      JOIN visits v ON v.id = ov.visit_id
-      WHERE ov.patient_id = ? AND ov.doctor_id = ? AND v.appointment_id IS NULL
-        AND v.status = 'In Consultation' AND ov.created_at >= ?
-      ORDER BY ov.created_at DESC LIMIT 1
-    `)
-    .get(patientId, user.id, `${clinicToday()}T00:00:00`) as { id: string } | undefined;
+  const supabase = await createClient();
+  const { data: existing } = await supabase
+    .from("optical_visits")
+    .select("id, visits!inner(appointment_id, status)")
+    .eq("patient_id", patientId)
+    .eq("doctor_id", user.id)
+    .is("visits.appointment_id", null)
+    .eq("visits.status", "In Consultation")
+    .gte("created_at", `${clinicToday()}T00:00:00`)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
   if (existing) return redirectSuccess(`/staff/optometrist/consultations/${existing.id}`, "Continuing today's optical record.");
 
   const now = nowIso();
-  const visitId = `vis_${crypto.randomUUID()}`;
-  const opticalVisitId = `ov_${crypto.randomUUID()}`;
-  db.transaction(() => {
-    db.prepare(`
-      INSERT INTO visits (id, patient_id, appointment_id, department, doctor_id, status, started_at, created_at)
-      VALUES (?, ?, NULL, 'optical', ?, 'In Consultation', ?, ?)
-    `).run(visitId, patientId, user.id, now, now);
-    db.prepare(`
-      INSERT INTO optical_visits (id, patient_id, visit_id, doctor_id, visit_date, presenting_complaint, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
-    `).run(opticalVisitId, patientId, visitId, user.id, clinicToday(), now, now);
-  })();
+  const visitId = crypto.randomUUID();
+  const opticalVisitId = crypto.randomUUID();
+
+  const { error: visitError } = await supabase.from("visits").insert({
+    id: visitId,
+    patient_id: patientId,
+    appointment_id: null,
+    department: "optical",
+    doctor_id: user.id,
+    status: "In Consultation",
+    started_at: now,
+    created_at: now,
+  });
+  if (visitError) return redirectError("/staff/optometrist/patients", "The optical record could not be started.");
+
+  const { error: opticalError } = await supabase.from("optical_visits").insert({
+    id: opticalVisitId,
+    patient_id: patientId,
+    visit_id: visitId,
+    doctor_id: user.id,
+    visit_date: clinicToday(),
+    presenting_complaint: null,
+    created_at: now,
+    updated_at: now,
+  });
+  if (opticalError) return redirectError("/staff/optometrist/patients", "The optical record could not be started.");
 
   await logAudit({
     actorId: user.id,

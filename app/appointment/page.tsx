@@ -55,9 +55,9 @@ export default function AppointmentPage() {
             <p className="mt-2 text-xs leading-5 text-navy-300">
               Cancel online, then book a new time, or call us and the front desk will help.
             </p>
-            <a href="tel:+254712345678" className="btn-teal mt-4 w-full">
+            <a href="tel:+254705188578" className="btn-teal mt-4 w-full">
               <Phone className="h-4 w-4" aria-hidden />
-              +254 712 345 678
+              +254 705 188 578
             </a>
             <Link href="/book" className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10">
               Book a new appointment

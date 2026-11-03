@@ -19,7 +19,7 @@ export default async function AdminSettingsPage({
 }) {
   await requireRole("admin");
   const params = await searchParams;
-  const settings = getSettings();
+  const settings = await getSettings();
   const value = (key: string, fallback = "") => settings[key] ?? fallback;
 
   return (
@@ -107,8 +107,8 @@ export default async function AdminSettingsPage({
         <div className="space-y-5">
           <Section title="Security posture">
             <ul className="space-y-2.5 text-[11px] leading-5 text-navy-600">
-              <li className="flex items-start gap-2"><LockKeyhole className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-600" aria-hidden /> Passwords are hashed with bcrypt; reset tokens are hashed, single-use and expire after 30 minutes.</li>
-              <li className="flex items-start gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-600" aria-hidden /> Sessions are signed HTTP-only cookies valid for 8 hours.</li>
+              <li className="flex items-start gap-2"><LockKeyhole className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-600" aria-hidden /> Passwords and password resets are managed by Supabase Auth; every table is protected by PostgreSQL Row Level Security.</li>
+              <li className="flex items-start gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-600" aria-hidden /> Sessions use short-lived Supabase tokens stored in HTTP-only cookies and refreshed by the proxy.</li>
               <li className="flex items-start gap-2"><Settings className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-600" aria-hidden /> Every server action re-checks the signed-in staff role.</li>
               <li className="flex items-start gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-600" aria-hidden /> Sensitive actions and clinical record views are written to the audit log.</li>
             </ul>
@@ -117,9 +117,21 @@ export default async function AdminSettingsPage({
           <Section title="Environment checks">
             <ul className="space-y-2 text-[11px] leading-5 text-navy-600">
               <li className="flex items-center justify-between gap-2">
-                <span>Session secret</span>
-                <span className={process.env.SESSION_SECRET ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200" : "badge bg-amber-50 text-amber-800 ring-amber-200"}>
-                  {process.env.SESSION_SECRET ? "Set" : "Development default"}
+                <span>Supabase URL</span>
+                <span className={process.env.NEXT_PUBLIC_SUPABASE_URL ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200" : "badge bg-amber-50 text-amber-800 ring-amber-200"}>
+                  {process.env.NEXT_PUBLIC_SUPABASE_URL ? "Set" : "Not set"}
+                </span>
+              </li>
+              <li className="flex items-center justify-between gap-2">
+                <span>Publishable key</span>
+                <span className={process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200" : "badge bg-amber-50 text-amber-800 ring-amber-200"}>
+                  {process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ? "Set" : "Not set"}
+                </span>
+              </li>
+              <li className="flex items-center justify-between gap-2">
+                <span>Service-role key (optional)</span>
+                <span className={process.env.SUPABASE_SERVICE_ROLE_KEY ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200" : "badge bg-slate-50 text-slate-700 ring-slate-200"}>
+                  {process.env.SUPABASE_SERVICE_ROLE_KEY ? "Set" : "Using RPC fallback"}
                 </span>
               </li>
               <li className="flex items-center justify-between gap-2">
@@ -130,11 +142,11 @@ export default async function AdminSettingsPage({
               </li>
               <li className="flex items-center justify-between gap-2">
                 <span>Database</span>
-                <span className="badge bg-sky-50 text-sky-700 ring-sky-200">Local SQLite</span>
+                <span className="badge bg-sky-50 text-sky-700 ring-sky-200">Supabase Postgres</span>
               </li>
             </ul>
             <p className="mt-3 text-[10px] leading-5 text-navy-400">
-              Set production secrets in the hosting environment. Never commit API keys or session secrets to the repository.
+              Set production secrets in the hosting environment. Never commit API keys or service-role keys to the repository.
             </p>
           </Section>
 

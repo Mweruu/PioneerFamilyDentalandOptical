@@ -2,9 +2,8 @@
 -- Pioneer Family Dental and Optical Clinic
 -- Supabase / PostgreSQL schema
 --
--- This is the production deployment blueprint. The running demo uses SQLite
--- (lib/db.ts) because no Supabase project is available in this environment.
--- Apply with:  supabase db push
+-- Apply with:  supabase db push   (or paste supabase/apply_all.sql into the
+-- Supabase SQL Editor)
 --
 -- Staff accounts live in auth.users (Supabase Auth). The `staff` table is the
 -- authorisation profile that maps an auth user to a clinic role. A role is

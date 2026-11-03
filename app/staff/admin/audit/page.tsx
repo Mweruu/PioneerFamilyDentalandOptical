@@ -17,7 +17,7 @@ export default async function AdminAuditPage({
 }) {
   await requireRole("admin");
   const params = await searchParams;
-  const logs = getAuditLogs(500);
+  const logs = await getAuditLogs(500);
   const actions = [...new Set(logs.map((log) => log.action))].sort();
   const roles = [...new Set(logs.map((log) => log.actor_role).filter(Boolean))].sort() as string[];
   const query = params.q?.trim().toLowerCase() ?? "";

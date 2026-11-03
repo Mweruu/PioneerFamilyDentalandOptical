@@ -19,7 +19,7 @@ export default async function DentistPatientsPage({
   await requireRole("dentist");
   const params = await searchParams;
   const query = params.q?.trim() ?? "";
-  const patients = listPatientsForDepartment("dental", query, 100);
+  const patients = await listPatientsForDepartment("dental", query, 100);
 
   return (
     <div>

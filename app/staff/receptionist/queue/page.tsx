@@ -41,7 +41,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata = { title: "Today's Queue" };
 
-type QueueAppointment = ReturnType<typeof getWaitingPatients>[number];
+type QueueAppointment = Awaited<ReturnType<typeof getWaitingPatients>>[number];
 
 function QueueCard({
   appointment,
@@ -114,7 +114,7 @@ function QueueColumn({
 }: {
   department: Department;
   waiting: QueueAppointment[];
-  inConsultation: ReturnType<typeof getInConsultation>;
+  inConsultation: Awaited<ReturnType<typeof getInConsultation>>;
 }) {
   return (
     <Section
@@ -174,19 +174,19 @@ export default async function ReceptionQueuePage({
   const today = clinicToday();
   const department: Department = params.walkIn === "optical" ? "optical" : "dental";
   const walkInOpen = params.walkIn === "dental" || params.walkIn === "optical";
-  const selectedPatient = params.patientId ? getPatient(params.patientId) : undefined;
+  const selectedPatient = params.patientId ? await getPatient(params.patientId) : undefined;
   const search = params.q?.trim() ?? "";
   const patientResults = walkInOpen && !selectedPatient
     ? search
-      ? searchPatients(search)
-      : listPatients(8)
+      ? await searchPatients(search)
+      : await listPatients(8)
     : [];
 
-  const dentalWaiting = getWaitingPatients("dental");
-  const opticalWaiting = getWaitingPatients("optical");
-  const dentalInConsultation = getInConsultation("dental");
-  const opticalInConsultation = getInConsultation("optical");
-  const doctors = getDoctors();
+  const dentalWaiting = await getWaitingPatients("dental");
+  const opticalWaiting = await getWaitingPatients("optical");
+  const dentalInConsultation = await getInConsultation("dental");
+  const opticalInConsultation = await getInConsultation("optical");
+  const doctors = await getDoctors();
   const departmentDoctors = doctors.filter((doctor) =>
     department === "dental" ? doctor.role === "dentist" : doctor.role === "eye_doctor",
   );
