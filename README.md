@@ -15,7 +15,7 @@ npm run dev                  # http://localhost:3000
 npm run build                # production build
 npm start                    # serve the production build
 ```
-
+<!-- 
 The app stores everything in Supabase (PostgreSQL + Auth). Apply the schema once with `supabase/apply_all.sql` (see [Supabase setup](#supabase-setup)), then optionally run `supabase/seed.sql` for demo data.
 
 Create `.env.local` from `.env.example` before deploying. The minimum is `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`; add `SUPABASE_SERVICE_ROLE_KEY` if you want the admin UI to create staff accounts through the Auth admin API. Set `NEXT_PUBLIC_APP_URL` so password-reset emails link back to the right host.
@@ -199,4 +199,4 @@ The production build passes with `npm run build`. The following workflows are in
 - [ ] Review the privacy notice with the clinic's data protection officer.
 - [ ] Register as a data controller/processor with the ODPC where required.
 - [ ] Add rate limiting at the edge for `/login`, `/book`, and `/appointment`.
-- [ ] Run an accessibility and penetration test before go-live.
+- [ ] Run an accessibility and penetration test before go-live. -->
