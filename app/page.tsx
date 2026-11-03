@@ -258,7 +258,7 @@ export default async function HomePage() {
             <p className="section-kicker">Visit the clinic</p>
             <h2 className="mt-3 text-2xl font-semibold text-navy-950 sm:text-3xl">Easy to reach. Easy to plan around.</h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-navy-500">
-              We are on Ngong Road with accessible parking and a comfortable waiting area. Walk-ins are welcome, but booked appointments are seen first.
+              We are on Buruburu Phase 1 along Outering Road Junction (opposite the bus terminus), Nairobi with accessible parking and a comfortable waiting area. Walk-ins are welcome, but booked appointments are seen first.
             </p>
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <div className="rounded-2xl border border-line bg-white p-4">

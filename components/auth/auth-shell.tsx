@@ -48,7 +48,7 @@ export function AuthShell({
         </div>
 
         <p className="relative text-[11px] leading-5 text-navy-400">
-          Pioneer Family Dental and Optical Clinic · Ngong Road, Nairobi
+          Pioneer Family Dental and Optical Clinic · Buruburu Phase 1 along Outering Road Junction (opposite the bus terminus), Nairobi, Nairobi
           <br />
           Access is monitored. Unauthorised use is prohibited.
         </p>
