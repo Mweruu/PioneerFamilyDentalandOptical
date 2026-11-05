@@ -9,6 +9,7 @@ import {
   Clock,
   Link2,
   Mail,
+  MessageCircle,
   MessageSquare,
   Phone,
   UserPlus,
@@ -198,7 +199,7 @@ export default async function ReceptionAppointmentDetail({
                 {notifications.map((notification) => (
                   <li key={notification.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3">
                     <div className="flex items-center gap-2.5">
-                      {notification.channel === "email" ? <Mail className="h-4 w-4 text-sky-600" aria-hidden /> : <MessageSquare className="h-4 w-4 text-teal-600" aria-hidden />}
+                      {notification.channel === "email" ? <Mail className="h-4 w-4 text-sky-600" aria-hidden /> : notification.channel === "whatsapp" ? <MessageCircle className="h-4 w-4 text-emerald-600" aria-hidden /> : <MessageSquare className="h-4 w-4 text-teal-600" aria-hidden />}
                       <div>
                         <p className="text-xs font-semibold capitalize text-navy-900">{notification.template.replaceAll("_", " ")} · {notification.channel}</p>
                         <p className="text-[10px] text-navy-400">{notification.recipient} · {formatDateTime(notification.created_at)}</p>
@@ -287,7 +288,7 @@ export default async function ReceptionAppointmentDetail({
             <form action={markReminderSentAction}>
               <input type="hidden" name="appointmentId" value={appointment.id} />
               <button type="submit" className="btn-secondary w-full">
-                <BellRing className="h-4 w-4" aria-hidden /> Queue SMS/email reminder
+                <BellRing className="h-4 w-4" aria-hidden /> Queue reminder
               </button>
             </form>
             <p className="mt-2 text-[11px] leading-5 text-navy-400">

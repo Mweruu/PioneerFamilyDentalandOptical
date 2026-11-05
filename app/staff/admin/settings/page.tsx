@@ -89,6 +89,13 @@ export default async function AdminSettingsPage({
                   <span className="mt-0.5 block text-[10px] leading-5 text-navy-400">Requires a Resend API key and verified sender address.</span>
                 </span>
               </label>
+              <label className="flex items-start gap-3 rounded-xl border border-line p-3">
+                <input type="checkbox" name="setting_notification_whatsapp_enabled" defaultChecked={value("notification_whatsapp_enabled") === "true"} className="mt-0.5 h-4 w-4 rounded border-navy-300 text-teal-600 focus:ring-teal-400" />
+                <span>
+                  <span className="block text-xs font-semibold text-navy-900">Enable WhatsApp reminders</span>
+                  <span className="mt-0.5 block text-[10px] leading-5 text-navy-400">Requires Meta WhatsApp Cloud API credentials and an approved reminder template.</span>
+                </span>
+              </label>
             </div>
           </Section>
 
@@ -138,6 +145,12 @@ export default async function AdminSettingsPage({
                 <span>App URL</span>
                 <span className={process.env.NEXT_PUBLIC_APP_URL ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200" : "badge bg-amber-50 text-amber-800 ring-amber-200"}>
                   {process.env.NEXT_PUBLIC_APP_URL ? "Set" : "Not set"}
+                </span>
+              </li>
+              <li className="flex items-center justify-between gap-2">
+                <span>WhatsApp Cloud API (optional)</span>
+                <span className={process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200" : "badge bg-slate-50 text-slate-700 ring-slate-200"}>
+                  {process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID ? "Set" : "Not set"}
                 </span>
               </li>
               <li className="flex items-center justify-between gap-2">

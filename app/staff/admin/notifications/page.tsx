@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Bell, Mail, MessageSquare, Send, Settings, ShieldCheck } from "lucide-react";
+import { Bell, Mail, MessageCircle, MessageSquare, Send, Settings, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Flash } from "@/components/staff/flash";
 import { Section } from "@/components/staff/section";
@@ -7,12 +7,23 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { SubmitButton } from "@/components/ui/submit-button";
 import { requireRole } from "@/lib/auth";
 import { getAppointments, getNotificationRows, getSettings } from "@/lib/data/queries";
+import { notificationProviders } from "@/lib/notifications";
 import { queueAppointmentReminderAction, updateNotificationFlagsAction } from "@/lib/actions/admin";
 import { clinicToday, formatDate, formatDateTime, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 export const metadata = { title: "Notifications" };
+
+function ChannelIcon({ channel }: { channel: string }) {
+  if (channel === "email") {
+    return <Mail className="h-3.5 w-3.5 text-sky-600" aria-hidden />;
+  }
+  if (channel === "whatsapp") {
+    return <MessageCircle className="h-3.5 w-3.5 text-emerald-600" aria-hidden />;
+  }
+  return <MessageSquare className="h-3.5 w-3.5 text-teal-600" aria-hidden />;
+}
 
 export default async function AdminNotificationsPage({
   searchParams,
@@ -28,8 +39,8 @@ export default async function AdminNotificationsPage({
   );
   const smsEnabled = settings.notification_sms_enabled === "true";
   const emailEnabled = settings.notification_email_enabled === "true";
-  const smsConfigured = Boolean(process.env.AFRICASTALKING_API_KEY && process.env.AFRICASTALKING_USERNAME);
-  const emailConfigured = Boolean(process.env.RESEND_API_KEY && process.env.NOTIFICATION_FROM_EMAIL);
+  const whatsappEnabled = settings.notification_whatsapp_enabled === "true";
+  const providers = notificationProviders();
   const queued = notifications.filter((row) => row.status === "queued").length;
   const sent = notifications.filter((row) => row.status === "sent").length;
   const failed = notifications.filter((row) => row.status === "failed").length;
@@ -40,7 +51,7 @@ export default async function AdminNotificationsPage({
       <PageHeader
         eyebrow="Patient communication"
         title="Notifications"
-        description="Queue appointment reminders and monitor SMS and email delivery. Provider credentials are configured through environment variables."
+        description="Queue appointment reminders and monitor WhatsApp, SMS and email delivery. Provider credentials are configured through environment variables."
         actions={<Link href="/staff/admin/settings" className="btn-secondary"><Settings className="h-4 w-4" aria-hidden /> Settings</Link>}
       />
       <Flash error={params.error} success={params.success} />
@@ -119,7 +130,7 @@ export default async function AdminNotificationsPage({
                         <td className="whitespace-nowrap text-[11px] text-navy-500">{formatDateTime(row.created_at)}</td>
                         <td>
                           <span className="inline-flex items-center gap-1 text-xs font-semibold text-navy-700">
-                            {row.channel === "sms" ? <MessageSquare className="h-3.5 w-3.5 text-teal-600" aria-hidden /> : <Mail className="h-3.5 w-3.5 text-sky-600" aria-hidden />}
+                            <ChannelIcon channel={row.channel} />
                             {row.channel.toUpperCase()}
                           </span>
                         </td>
@@ -141,17 +152,24 @@ export default async function AdminNotificationsPage({
             <form action={updateNotificationFlagsAction} className="space-y-3">
               <input type="hidden" name="returnTo" value="/staff/admin/notifications" />
               <label className="flex items-start gap-3 rounded-xl border border-line p-3">
+                <input type="checkbox" name="whatsappEnabled" defaultChecked={whatsappEnabled} className="mt-0.5 h-4 w-4 rounded border-navy-300 text-teal-600 focus:ring-teal-400" />
+                <span>
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-navy-900"><MessageCircle className="h-3.5 w-3.5 text-emerald-600" aria-hidden /> WhatsApp reminders</span>
+                  <span className="mt-0.5 block text-[10px] leading-5 text-navy-400">{providers.whatsapp ? "Meta WhatsApp Cloud API credentials detected." : "Meta WhatsApp Cloud API credentials not configured."}</span>
+                </span>
+              </label>
+              <label className="flex items-start gap-3 rounded-xl border border-line p-3">
                 <input type="checkbox" name="smsEnabled" defaultChecked={smsEnabled} className="mt-0.5 h-4 w-4 rounded border-navy-300 text-teal-600 focus:ring-teal-400" />
                 <span>
                   <span className="flex items-center gap-1.5 text-xs font-semibold text-navy-900"><MessageSquare className="h-3.5 w-3.5 text-teal-600" aria-hidden /> SMS reminders</span>
-                  <span className="mt-0.5 block text-[10px] leading-5 text-navy-400">{smsConfigured ? "Africa's Talking credentials detected." : "Africa's Talking credentials not configured."}</span>
+                  <span className="mt-0.5 block text-[10px] leading-5 text-navy-400">{providers.sms ? "Africa's Talking credentials detected." : "Africa's Talking credentials not configured."}</span>
                 </span>
               </label>
               <label className="flex items-start gap-3 rounded-xl border border-line p-3">
                 <input type="checkbox" name="emailEnabled" defaultChecked={emailEnabled} className="mt-0.5 h-4 w-4 rounded border-navy-300 text-teal-600 focus:ring-teal-400" />
                 <span>
                   <span className="flex items-center gap-1.5 text-xs font-semibold text-navy-900"><Mail className="h-3.5 w-3.5 text-sky-600" aria-hidden /> Email reminders</span>
-                  <span className="mt-0.5 block text-[10px] leading-5 text-navy-400">{emailConfigured ? "Resend credentials detected." : "Resend credentials not configured."}</span>
+                  <span className="mt-0.5 block text-[10px] leading-5 text-navy-400">{providers.email ? "Resend credentials detected." : "Resend credentials not configured."}</span>
                 </span>
               </label>
               <SubmitButton className="w-full" pendingText="Saving…">Save preferences</SubmitButton>
@@ -161,12 +179,16 @@ export default async function AdminNotificationsPage({
           <Section title="Provider status">
             <ul className="space-y-2.5 text-[11px] leading-5 text-navy-600">
               <li className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5"><MessageCircle className="h-3.5 w-3.5 text-navy-400" aria-hidden /> Meta WhatsApp Cloud API</span>
+                <span className={providers.whatsapp ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200" : "badge bg-amber-50 text-amber-800 ring-amber-200"}>{providers.whatsapp ? "Configured" : "Not configured"}</span>
+              </li>
+              <li className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5"><MessageSquare className="h-3.5 w-3.5 text-navy-400" aria-hidden /> Africa&apos;s Talking</span>
-                <span className={smsConfigured ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200" : "badge bg-amber-50 text-amber-800 ring-amber-200"}>{smsConfigured ? "Configured" : "Not configured"}</span>
+                <span className={providers.sms ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200" : "badge bg-amber-50 text-amber-800 ring-amber-200"}>{providers.sms ? "Configured" : "Not configured"}</span>
               </li>
               <li className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5"><Mail className="h-3.5 w-3.5 text-navy-400" aria-hidden /> Resend email</span>
-                <span className={emailConfigured ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200" : "badge bg-amber-50 text-amber-800 ring-amber-200"}>{emailConfigured ? "Configured" : "Not configured"}</span>
+                <span className={providers.email ? "badge bg-emerald-50 text-emerald-700 ring-emerald-200" : "badge bg-amber-50 text-amber-800 ring-amber-200"}>{providers.email ? "Configured" : "Not configured"}</span>
               </li>
             </ul>
             <p className="mt-3 flex items-start gap-1.5 text-[10px] leading-5 text-navy-400">
@@ -177,7 +199,7 @@ export default async function AdminNotificationsPage({
 
           <div className="card p-4 text-[11px] leading-5 text-navy-500">
             <p className="flex items-center gap-2 font-semibold text-navy-800"><Bell className="h-4 w-4 text-teal-600" aria-hidden /> Reminder policy</p>
-            <p className="mt-2">Send reminders at least 24 hours before an appointment. Do not send reminders for cancelled, completed or no-show bookings.</p>
+            <p className="mt-2">A scheduled job queues reminders the day before each appointment at 09:00 EAT; staff can also send them manually. Each reminder goes to every channel the clinic has enabled and configured — WhatsApp, SMS and email. Do not send reminders for cancelled, completed or no-show bookings.</p>
           </div>
         </div>
       </div>

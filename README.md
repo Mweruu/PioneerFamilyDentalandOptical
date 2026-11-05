@@ -99,7 +99,7 @@ lib/
   actions/               Server actions grouped by domain
   auth.ts                Supabase session + clinic role guards
   audit.ts               Audit logging
-  notifications.ts       SMS (Africa's Talking) and email (Resend) delivery
+  notifications.ts       WhatsApp (Meta Cloud API), SMS (Africa's Talking) and email (Resend) delivery
   types.ts               Domain types and clinical constants
   supabase/             Browser, server and service-role Supabase clients
 supabase/migrations/     PostgreSQL schema + RLS (0001-0003)
@@ -161,14 +161,79 @@ Security model:
 
 ## Notifications
 
-`lib/notifications.ts` sends SMS through Africa's Talking and email through Resend when the relevant environment variables are set. Without credentials it records the notification with status `not_configured` so the attempt is still visible in the admin notification log. Configure:
+`lib/notifications.ts` delivers appointment reminders over WhatsApp, SMS and email. Confirmations and cancellations use a single best channel (email when the patient supplied one, otherwise SMS).
+
+### Reminder policy
+
+Reminders are only queued for active appointments (not cancelled, completed or no-show). A reminder is delivered on **every channel the clinic has enabled** in Admin → Notifications and for which credentials exist:
+
+- **WhatsApp** — Meta WhatsApp Cloud API
+- **SMS** — Africa's Talking
+- **Email** — Resend
+
+Each channel is logged separately with its delivery status. If nothing is enabled or configured, the attempt is recorded as `not_configured` with an explanation. Phone numbers are normalised to international format (`07…` → `2547…`) before sending to WhatsApp.
+
+### Provider configuration
 
 ```
+# WhatsApp (Meta WhatsApp Cloud API)
+WHATSAPP_ACCESS_TOKEN
+WHATSAPP_PHONE_NUMBER_ID
+WHATSAPP_TEMPLATE_NAME=appointment_reminder
+WHATSAPP_TEMPLATE_LANGUAGE=en
+WHATSAPP_API_VERSION=v23.0
+
+# SMS
 AFRICASTALKING_API_KEY
 AFRICASTALKING_USERNAME
 AFRICASTALKING_SENDER_ID
+
+# Email
 RESEND_API_KEY
 NOTIFICATION_FROM_EMAIL
+```
+
+WhatsApp is disabled until an administrator turns on **WhatsApp reminders**. Business-initiated messages must use a template approved in Meta Business Manager whose body takes these positional parameters in order:
+
+```
+Hello {{1}}, this is a reminder of your {{2}} appointment at {{3}} on
+{{4}} at {{5}} with {{6}}. Reference {{7}}. Call {{8}}.
+```
+
+| Parameter | Value |
+| --- | --- |
+| `{{1}}` | Patient name |
+| `{{2}}` | Department |
+| `{{3}}` | Clinic name |
+| `{{4}}` | Appointment date |
+| `{{5}}` | Appointment time |
+| `{{6}}` | Clinician |
+| `{{7}}` | Appointment reference |
+| `{{8}}` | Clinic phone |
+
+Set the template name/language with `WHATSAPP_TEMPLATE_NAME` and `WHATSAPP_TEMPLATE_LANGUAGE` if the approved template uses different values. Without credentials the notification is recorded with status `not_configured` so the attempt is still visible in the admin notification log.
+
+### Automated reminders
+
+`vercel.json` registers a daily Vercel Cron job at **06:00 UTC (09:00 EAT)** that calls `GET /api/cron/reminders`. The job:
+
+1. Finds `Booked` and `Confirmed` appointments for the next clinic day.
+2. Skips any appointment that already has a reminder row, so manual reminders and retried runs never duplicate messages.
+3. Delivers the reminder through the same enabled-channel policy as the manual button.
+
+It requires two server-only environment variables:
+
+```
+CRON_SECRET=<long random string>
+SUPABASE_SERVICE_ROLE_KEY=<service-role key>
+```
+
+Vercel sends `CRON_SECRET` to the route as `Authorization: Bearer <CRON_SECRET>`; requests without it are rejected. The service-role key is needed because the job reads appointments across both departments without a signed-in user. A daily schedule works on every Vercel plan; change the schedule in `vercel.json` if you prefer a different time.
+
+You can test the job locally or against a deployment with:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://your-domain/api/cron/reminders
 ```
 
 ---
@@ -192,8 +257,9 @@ The production build passes with `npm run build`. The following workflows are in
 
 - [ ] Do not run `supabase/seed.sql` against production; create real staff through Supabase Auth or the admin UI.
 - [ ] Set the correct `NEXT_PUBLIC_APP_URL` and `NEXT_PUBLIC_SUPABASE_*` values.
-- [ ] Apply all migrations in `supabase/migrations` (0001–0004).
-- [ ] Configure SMS and email providers and verify sender IDs.
+- [ ] Apply all migrations in `supabase/migrations` (0001–0005).
+- [ ] Configure WhatsApp, SMS and email providers and verify sender IDs and templates.
+- [ ] Set `SUPABASE_SERVICE_ROLE_KEY` and a strong `CRON_SECRET` so the daily reminder job can run.
 - [ ] Serve over HTTPS so auth cookies are marked `secure`.
 - [ ] Back up the database and define a retention schedule.
 - [ ] Review the privacy notice with the clinic's data protection officer.

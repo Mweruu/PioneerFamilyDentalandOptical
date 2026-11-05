@@ -241,7 +241,7 @@ export type AuditLog = {
 export type NotificationRow = {
   id: string;
   appointment_id: string | null;
-  channel: "sms" | "email";
+  channel: "sms" | "email" | "whatsapp";
   recipient: string;
   template: string;
   status: "queued" | "sent" | "failed" | "not_configured";

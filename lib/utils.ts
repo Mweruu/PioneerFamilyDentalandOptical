@@ -16,6 +16,18 @@ export function clinicToday(): string {
   }).format(new Date());
 }
 
+/** A clinic-local date offset by whole days, as `YYYY-MM-DD`. */
+export function clinicDatePlus(days: number): string {
+  const base = new Date(`${clinicToday()}T12:00:00+03:00`);
+  base.setUTCDate(base.getUTCDate() + days);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: CLINIC_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(base);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }

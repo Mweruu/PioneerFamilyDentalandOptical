@@ -35,7 +35,7 @@ const sections = [
       "To register you as a patient and maintain one shared master record across our dental and optical departments.",
       "To schedule, confirm, remind you about and manage appointments.",
       "To provide safe clinical care, including diagnosis, treatment, follow-up and coordination between your dental and optical care teams.",
-      "To send appointment confirmations, reminders and cancellation notices by SMS or email where you have provided contact details.",
+      "To send appointment confirmations, reminders and cancellation notices by WhatsApp, SMS or email where you have provided contact details.",
       "To meet our legal, regulatory and professional record-keeping obligations.",
       "To keep the clinic secure, prevent misuse and maintain audit logs.",
     ],
@@ -60,9 +60,9 @@ const sections = [
   },
   {
     id: "sms-email",
-    title: "6. SMS and email notifications",
+    title: "6. WhatsApp, SMS and email notifications",
     body: [
-      "If you provide a phone number or email address, we may send appointment confirmations, reminders and cancellation notices. Message delivery is handled by service providers acting on our instructions.",
+      "If you provide a phone number or email address, we may send appointment confirmations, reminders and cancellation notices by WhatsApp, SMS or email. Message delivery is handled by service providers acting on our instructions.",
       "You can ask us to stop non-essential messages at any time. We may still contact you about essential clinical or appointment matters.",
     ],
   },

@@ -164,7 +164,7 @@ export default async function AdminOverviewPage({
             )}
           </Section>
 
-          <Section title="Recent notifications" description="Delivery status from the SMS and email queue." bodyClassName="p-0">
+          <Section title="Recent notifications" description="Delivery status from the WhatsApp, SMS and email queue." bodyClassName="p-0">
             {notifications.length === 0 ? (
               <p className="px-5 py-8 text-center text-xs text-navy-500">No notifications recorded.</p>
             ) : (

@@ -30,6 +30,7 @@ const SETTING_KEYS = [
   "appointment_duration",
   "notification_sms_enabled",
   "notification_email_enabled",
+  "notification_whatsapp_enabled",
   "notification_sender",
   "privacy_contact",
 ];
@@ -363,9 +364,18 @@ export async function saveSettingsAction(formData: FormData) {
 
   for (const key of SETTING_KEYS) {
     const raw = formData.get(`setting_${key}`);
-    if (raw === null && key !== "notification_sms_enabled" && key !== "notification_email_enabled") continue;
+    if (
+      raw === null &&
+      key !== "notification_sms_enabled" &&
+      key !== "notification_email_enabled" &&
+      key !== "notification_whatsapp_enabled"
+    ) {
+      continue;
+    }
     const value =
-      key === "notification_sms_enabled" || key === "notification_email_enabled"
+      key === "notification_sms_enabled" ||
+      key === "notification_email_enabled" ||
+      key === "notification_whatsapp_enabled"
         ? checkbox(formData, `setting_${key}`)
           ? "true"
           : "false"
@@ -418,6 +428,7 @@ export async function updateNotificationFlagsAction(formData: FormData) {
   const returnTo = formReturnPath(formData, "/staff/admin/notifications");
   const sms = checkbox(formData, "smsEnabled");
   const email = checkbox(formData, "emailEnabled");
+  const whatsapp = checkbox(formData, "whatsappEnabled");
   const now = nowIso();
 
   const supabase = await createClient();
@@ -425,6 +436,7 @@ export async function updateNotificationFlagsAction(formData: FormData) {
     [
       { key: "notification_sms_enabled", value: sms ? "true" : "false", updated_at: now },
       { key: "notification_email_enabled", value: email ? "true" : "false", updated_at: now },
+      { key: "notification_whatsapp_enabled", value: whatsapp ? "true" : "false", updated_at: now },
     ],
     { onConflict: "key" },
   );
@@ -435,7 +447,7 @@ export async function updateNotificationFlagsAction(formData: FormData) {
     actorName: user.name,
     actorRole: user.role,
     action: "admin.notification_flags",
-    details: `SMS ${sms ? "enabled" : "disabled"}; email ${email ? "enabled" : "disabled"}.`,
+    details: `WhatsApp ${whatsapp ? "enabled" : "disabled"}; SMS ${sms ? "enabled" : "disabled"}; email ${email ? "enabled" : "disabled"}.`,
   });
   redirectSuccess(returnTo, "Notification preferences updated.");
 }
